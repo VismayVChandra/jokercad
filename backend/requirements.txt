@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.10
+python-dotenv>=1.0
+build123d>=0.7
+groq>=0.11
+google-generativeai>=0.8
+requests>=2.32
