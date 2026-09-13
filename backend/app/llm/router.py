@@ -15,6 +15,18 @@ _ALL_PROVIDERS = {
 _NOT_CONFIGURED = "not configured (no API key set)"
 
 
+def _pretty_wait(raw: str) -> str:
+    """'19m49.727999999s' -> '19m 50s'."""
+    match = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", raw)
+    if not match:
+        return raw
+    hours, minutes, seconds = (float(g) if g else 0.0 for g in match.groups())
+    total = round(hours * 3600 + minutes * 60 + seconds)
+    h, rest = divmod(total, 3600)
+    m, s = divmod(rest, 60)
+    return " ".join(f"{value}{unit}" for value, unit in ((h, "h"), (m, "m"), (s, "s")) if value) or "a moment"
+
+
 def _explain(provider: str, error: str) -> str:
     """Turns a provider's raw API error into a message worth showing a user."""
     name = provider.capitalize()
@@ -26,15 +38,25 @@ def _explain(provider: str, error: str) -> str:
         )
     if "per day" in text:
         retry = re.search(r"try again in ([0-9hms.]+)", text)
-        when = f" {name} says to try again in {retry.group(1).rstrip('.')}." if retry else ""
+        when = f" {name} says to try again in {_pretty_wait(retry.group(1).rstrip('.'))}." if retry else ""
         return f"{name}'s free daily token allowance for this model is used up.{when}"
     if re.search(r"\b429\b", text) or "rate limit" in text or "rate_limit" in text:
         return f"{name}'s free-tier rate limit was reached. Wait a minute, then try again."
-    if re.search(r"\b401\b", text) or "api key" in text:
+    if re.search(r"\b404\b", text) or "not_found" in text or "no longer available" in text:
+        return f"{name} doesn't offer the model set in {provider.upper()}_MODEL. Update it in the server's environment variables."
+    if re.search(r"\b(401|403)\b", text) or "api key" in text:
         return f"{name} rejected the API key. Check it in the server's environment variables."
     if "timed out" in text or "timeout" in text:
         return f"{name} took too long to answer. Try again."
-    return f"The AI provider ({name}) failed: {error[:200]}"
+    return f"{name} failed: {error[:200]}"
+
+
+def _worth_reporting(provider: str, error: str) -> bool:
+    # An unconfigured provider, or a local Ollama that simply isn't running
+    # (it never is on a hosted deploy), isn't news to the user.
+    if error == _NOT_CONFIGURED:
+        return False
+    return not (provider == "ollama" and "connection" in error.lower())
 
 
 class RouterExhaustedError(Exception):
@@ -44,12 +66,14 @@ class RouterExhaustedError(Exception):
         super().__init__(f"All LLM providers failed or are unconfigured — {detail}")
 
     def user_message(self) -> str:
-        failures = [(name, err) for name, err in self.attempts.items() if err != _NOT_CONFIGURED]
+        failures = [(name, err) for name, err in self.attempts.items() if _worth_reporting(name, err)]
         if not failures:
-            return "No AI provider is configured. Set GROQ_API_KEY or GEMINI_API_KEY on the server."
-        name, error = failures[0]
-        message = _explain(name, error)
-        if name != "gemini" and self.attempts.get("gemini") == _NOT_CONFIGURED:
+            return "No AI provider is available. Set GROQ_API_KEY or GEMINI_API_KEY on the server."
+        # Every provider that was tried and failed, so a fallback's own problem
+        # (e.g. a retired model name) isn't hidden behind the first failure.
+        first, *others = [_explain(name, err) for name, err in failures]
+        message = " ".join([first, *(f"It also tried {name.capitalize()}: {text}" for (name, _), text in zip(failures[1:], others))])
+        if "gemini" not in dict(failures) and self.attempts.get("gemini") == _NOT_CONFIGURED:
             message += " Adding a free GEMINI_API_KEY lets the app fall back to Gemini automatically."
         return message
 
