@@ -8,6 +8,14 @@ from .base import LLMProvider, ProviderError, first_answer, model_chain
 _API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
+def _mime_type(image: bytes) -> str:
+    if image.startswith(b"\x89PNG"):
+        return "image/png"
+    if image[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 class GeminiProvider(LLMProvider):
     """Calls the Gemini REST API directly; the google-generativeai SDK and its
     dependencies would add ~130 MB to the deploy bundle."""
@@ -45,9 +53,10 @@ class GeminiProvider(LLMProvider):
             {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
             for m in messages
         ]
-        for image in images or []:
+        # In order, before the text: the review refers to "the first picture".
+        for image in reversed(images or []):
             contents[-1]["parts"].insert(
-                0, {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(image).decode("ascii")}}
+                0, {"inline_data": {"mime_type": _mime_type(image), "data": base64.b64encode(image).decode("ascii")}}
             )
         body = {
             "system_instruction": {"parts": [{"text": system_prompt}]},

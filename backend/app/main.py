@@ -1,4 +1,5 @@
 import base64
+import binascii
 import logging
 import os
 import re
@@ -65,6 +66,13 @@ MAX_ERROR_CHARS = 1500
 MAX_GLB_BYTES = 3_000_000
 # STEP goes back as the raw file, so it can use nearly all of the 4.5 MB.
 MAX_STEP_BYTES = 4_000_000
+# A reference picture sent with a prompt; the browser shrinks photos well below this.
+MAX_IMAGE_BYTES = 3_000_000
+PICTURE_NOTE = (
+    "A reference photo or sketch is attached. Build the object it shows as a part: use any dimensions "
+    "written on it, and size the rest in proportion to a given dimension, or at a sensible real-world size "
+    "if none is given. Keep every visible feature (holes, slots, steps, bosses, rounded edges)."
+)
 # After a part builds, a second model checks it against the request.
 REVIEW_PARTS = os.getenv("REVIEW_PARTS", "1") != "0"
 
@@ -229,7 +237,9 @@ def _part_picture(result: ExecutionResult) -> bytes | None:
         return None
 
 
-def _review_part(requests: list[str], result: ExecutionResult, notes: list[str]) -> str | None:
+def _review_part(
+    requests: list[str], result: ExecutionResult, notes: list[str], reference: bytes | None = None
+) -> str | None:
     """What the reviewer thinks is wrong with a built part, or None if it looks right.
 
     The reviewer looks at a picture of the part when a model that can see is
@@ -244,8 +254,16 @@ def _review_part(requests: list[str], result: ExecutionResult, notes: list[str])
     messages = [{"role": "user", "content": build_review_request(requests, result.code, stats, notes)}]
     picture = _part_picture(result)
     if picture:
+        images = [picture]
+        if reference:
+            images = [reference, picture]
+            messages = [{
+                "role": "user",
+                "content": messages[0]["content"]
+                + "\n\nThe first picture is the user's reference; the second is the built part.",
+            }]
         try:
-            return parse_verdict(router.review_visual(VISUAL_REVIEW_PROMPT, messages, picture))
+            return parse_verdict(router.review_visual(VISUAL_REVIEW_PROMPT, messages, images))
         except RouterExhaustedError as e:
             logger.warning("review by picture unavailable, checking the code instead: %s", e)
     try:
@@ -291,19 +309,33 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     _require_password(request)
 
     prompt = req.prompt.strip()
-    if not prompt:
+    image = None
+    if req.image:
+        try:
+            image = base64.b64decode(req.image, validate=True)
+        except (binascii.Error, ValueError):
+            return GenerateResponse(ok=False, error="The attached picture couldn't be read.")
+        if len(image) > MAX_IMAGE_BYTES:
+            return GenerateResponse(ok=False, error="The attached picture is too large (over 3 MB).")
+        if not any(p.is_configured() for p in router.vision_providers):
+            return GenerateResponse(
+                ok=False, error="Building from a picture needs Gemini: set GEMINI_API_KEY on the server."
+            )
+    if not prompt and not image:
         return GenerateResponse(ok=False, error="Prompt is empty.")
     if len(prompt) > MAX_PROMPT_LENGTH:
         return GenerateResponse(ok=False, error=f"Prompt is too long (max {MAX_PROMPT_LENGTH} characters).")
 
     _consume_generation_slot()
 
-    history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], prompt)
-    base_messages = history + [{"role": "user", "content": prompt}]
+    request_text = prompt or "Build the object in the picture."
+    history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], request_text)
+    base_messages = history + [{"role": "user", "content": f"{PICTURE_NOTE}\n\n{request_text}" if image else request_text}]
     messages = base_messages
-    required_features = [(has, message) for wants, has, message, _ in _FEATURE_CHECKS if wants(prompt)]
-    requests_so_far = [m["content"] for m in history if m["role"] == "user"] + [prompt]
-    review_notes = _review_notes(prompt)
+    images = [image] if image else None
+    required_features = [(has, message) for wants, has, message, _ in _FEATURE_CHECKS if wants(request_text)]
+    requests_so_far = [m["content"] for m in history if m["role"] == "user"] + [request_text]
+    review_notes = _review_notes(request_text)
 
     provider_used = None
     code = None
@@ -315,7 +347,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     try:
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
             try:
-                text, provider_used = router.generate(SYSTEM_PROMPT, messages)
+                text, provider_used = router.generate(SYSTEM_PROMPT, messages, images=images)
             except RouterExhaustedError as e:
                 logger.warning("attempt=%d all providers failed: %s", attempt, e)
                 return flagged or GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
@@ -334,7 +366,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
             if result.ok:
                 logger.info("provider=%s attempt=%d ok (%d bytes)", provider_used, attempt, len(result.glb_bytes))
                 response = _model_response(result.glb_bytes, code, provider_used, attempt, result.stats)
-                problem = _review_part(requests_so_far, result, review_notes) if response.ok else None
+                problem = _review_part(requests_so_far, result, review_notes, image) if response.ok else None
                 if not problem:
                     return response
                 logger.info("provider=%s attempt=%d review flagged: %s", provider_used, attempt, problem[:120])

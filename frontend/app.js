@@ -6,6 +6,7 @@ import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import { bodyLabels, makeRig, moveTo } from "./motion.js";
+import { analyzePrint, bestOrientation, make3mf } from "./print.js";
 
 const API_BASE = "";
 // Matches the server's MAX_HISTORY_MESSAGES; it would drop older turns anyway.
@@ -81,6 +82,30 @@ const motionValue = document.getElementById("motionValue");
 const motionHint = document.getElementById("motionHint");
 const motionPlayBtn = document.getElementById("motionPlayBtn");
 const motionResetBtn = document.getElementById("motionResetBtn");
+const attachBtn = document.getElementById("attachBtn");
+const imageInput = document.getElementById("imageInput");
+const attachmentEl = document.getElementById("attachment");
+const attachmentImg = document.getElementById("attachmentImg");
+const attachmentClear = document.getElementById("attachmentClear");
+const editBtn = document.getElementById("editBtn");
+const editPopup = document.getElementById("editPopup");
+const editTitle = document.getElementById("editTitle");
+const editForm = document.getElementById("editForm");
+const editInput = document.getElementById("editInput");
+const editChips = document.getElementById("editChips");
+const printBtn = document.getElementById("printBtn");
+const printCard = document.getElementById("printCard");
+const printCloseBtn = document.getElementById("printCloseBtn");
+const printerSelect = document.getElementById("printerSelect");
+const materialSelect = document.getElementById("materialSelect");
+const infillSelect = document.getElementById("infillSelect");
+const priceInput = document.getElementById("priceInput");
+const priceLabel = document.getElementById("priceLabel");
+const printChecks = document.getElementById("printChecks");
+const printEstimate = document.getElementById("printEstimate");
+const orientBtn = document.getElementById("orientBtn");
+const orientResetBtn = document.getElementById("orientResetBtn");
+const export3mfBtn = document.getElementById("export3mfBtn");
 
 const narrowScreen = window.matchMedia("(max-width: 900px)");
 
@@ -388,12 +413,15 @@ function showModel(gltf, reframe, parts, motionSpec) {
   colorParts(model, parts);
   setCurrentObject(model, { reframe, source });
   setupMotion(model, parts, motionSpec);
+  printModelChanged();
 }
 
 // An empty viewer, for a part that hasn't been built yet.
 function clearViewer() {
   displayToken++;
   resetMotion();
+  setPrintMode(false);
+  setPicking(false);
   setSection(false);
   setMeasuring(false);
   removeCurrentObject();
@@ -449,13 +477,28 @@ function scrollChatToEnd() {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-function addUserEntry(text) {
+function addUserEntry(text, image = null) {
   if (emptyState) emptyState.remove();
   const el = document.createElement("div");
-  el.className = "entry entry-user";
-  el.textContent = text;
+  fillUserEntry(el, text, image);
   chatLog.appendChild(el);
   scrollChatToEnd();
+}
+
+// image: a small data: URL of a picture sent with the prompt.
+function fillUserEntry(el, text, image) {
+  el.className = "entry entry-user";
+  // Only pictures made here: an imported project file could name anything.
+  if (typeof image === "string" && image.startsWith("data:image/")) {
+    const img = document.createElement("img");
+    img.className = "entry-image";
+    img.alt = "Attached picture";
+    img.src = image;
+    el.append(img);
+  }
+  const span = document.createElement("span");
+  span.textContent = text;
+  el.append(span);
 }
 
 function addThinkingEntry(text) {
@@ -804,10 +847,12 @@ document.querySelectorAll(".chip").forEach((chip) => {
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   const prompt = input.value.trim();
-  if (!prompt || busy) return;
+  if ((!prompt && !attachment) || busy) return;
+  const picture = attachment;
   input.value = "";
   autoResize();
-  runPrompt(prompt);
+  setAttachment(null);
+  runPrompt(prompt, prompt || "Build this from the picture", { picture });
 });
 
 // Asked of the model by the Organic button; the chat shows ORGANIC_LABEL instead.
@@ -823,27 +868,32 @@ organicBtn.addEventListener("click", () => {
 });
 
 // shownAs: what the chat shows for the prompt, when not the prompt itself.
-async function runPrompt(prompt, shownAs = prompt) {
-  addUserEntry(shownAs);
-  recordLog({ kind: "user", text: shownAs });
+// picture: a photo or sketch to build from, { base64, thumb }.
+async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
+  addUserEntry(shownAs, picture && picture.thumb);
+  recordLog({ kind: "user", text: shownAs, ...(picture ? { image: picture.thumb } : {}) });
   sendBtn.classList.add("is-loading");
   setBusy(true, "Building part…");
   const pending = addThinkingEntry("Generating…");
 
-  const { data, unauthorized } = await callApi("/api/generate", { prompt, history: conversation }, pending);
+  const payload = { prompt, history: conversation, ...(picture ? { image: picture.base64 } : {}) };
+  const { data, unauthorized } = await callApi("/api/generate", payload, pending);
   if (unauthorized && shownAs === prompt) {
     input.value = prompt;
     autoResize();
   }
+  if (unauthorized && picture) setAttachment(picture);
   if (data && data.ok) {
-    conversation.push({ role: "user", content: prompt }, { role: "assistant", content: fence(data.code) });
+    // Later turns go by the code, so the picture itself isn't sent again.
+    const asked = picture ? `(with a reference picture) ${prompt || "Build the object in the picture."}` : prompt;
+    conversation.push({ role: "user", content: asked }, { role: "assistant", content: fence(data.code) });
     conversation.splice(0, Math.max(0, conversation.length - HISTORY_LIMIT));
 
     const retryNote = data.attempts > 1 ? ` · self-repaired after ${data.attempts} attempts` : "";
     setProviderBadge(data.provider_used);
     // A new part is named after its first successful prompt, unless renamed.
     if (activePart.autoName && !versions.length) {
-      activePart.name = nameFromPrompt(prompt);
+      activePart.name = nameFromPrompt(prompt || "Part from a picture");
       activePart.autoName = false;
       renderPartTabs();
     }
@@ -1012,6 +1062,7 @@ const rulerPointGeometry = new THREE.SphereGeometry(1, 16, 12);
 const SNAP_PIXELS = 10;
 
 function idleStatusText() {
+  if (picker.on) return "Click a face or a hole to change it";
   if (ruler.on) return "Click two points on the part to measure";
   if (assembly.mating) return assembly.mateFirst ? "Now click the face it should sit against" : "Click a flat face on the part to move";
   if (assembly.on) {
@@ -1099,6 +1150,7 @@ function clearRuler() {
 
 function setMeasuring(on) {
   if (on && assembly.mating) setMating(false);
+  if (on) setPicking(false);
   ruler.on = on && Boolean(currentModel);
   measureBtn.classList.toggle("active", ruler.on);
   renderer.domElement.style.cursor = ruler.on ? "crosshair" : "";
@@ -1315,6 +1367,629 @@ async function offerSharedPart() {
     else buildBtn.disabled = false;
   });
 }
+
+/* ---------------- pictures ---------------- */
+
+// A photo or sketch to send with the next prompt: { base64, thumb } (JPEGs).
+let attachment = null;
+
+// The picture redrawn at most `max` pixels across, on white (sketches often
+// have transparent backgrounds), as a JPEG data: URL.
+function shrinkPicture(bitmap, max, quality) {
+  const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function attachPicture(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    showToast("That isn't a picture. Attach a photo or a sketch.");
+    return;
+  }
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    showToast("Couldn't open that picture.");
+    return;
+  }
+  const full = shrinkPicture(bitmap, 1280, 0.85);
+  setAttachment({ base64: full.split(",")[1], thumb: shrinkPicture(bitmap, 240, 0.7) });
+  input.focus();
+}
+
+function setAttachment(value) {
+  attachment = value;
+  attachmentEl.hidden = !value;
+  if (value) attachmentImg.src = value.thumb;
+  else attachmentImg.removeAttribute("src");
+  input.placeholder = value ? "What is it? Add sizes if you know them (optional)" : "Describe a part…";
+}
+
+attachBtn.addEventListener("click", () => imageInput.click());
+imageInput.addEventListener("change", () => {
+  attachPicture(imageInput.files[0]);
+  imageInput.value = "";
+});
+attachmentClear.addEventListener("click", () => setAttachment(null));
+
+input.addEventListener("paste", (e) => {
+  const item = [...((e.clipboardData && e.clipboardData.items) || [])].find((i) => i.type.startsWith("image/"));
+  if (!item) return;
+  e.preventDefault();
+  attachPicture(item.getAsFile());
+});
+
+panel.addEventListener("dragover", (e) => {
+  if (![...e.dataTransfer.items].some((item) => item.kind === "file")) return;
+  e.preventDefault();
+  panel.classList.add("is-dropping");
+});
+panel.addEventListener("dragleave", (e) => {
+  if (!panel.contains(e.relatedTarget)) panel.classList.remove("is-dropping");
+});
+panel.addEventListener("drop", (e) => {
+  e.preventDefault();
+  panel.classList.remove("is-dropping");
+  if (e.dataTransfer.files[0]) attachPicture(e.dataTransfer.files[0]);
+});
+
+/* ---------------- click to edit ---------------- */
+
+const picker = { on: false, feature: null };
+const pickGroup = new THREE.Group();
+scene.add(pickGroup);
+const pickMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffd166,
+  transparent: true,
+  opacity: 0.55,
+  side: THREE.DoubleSide,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2,
+});
+
+// Quick changes offered for each kind of picked feature.
+const EDIT_CHIPS = {
+  flat: ["Make it 2 mm thicker", "Round its edges", "Add a hole in the middle", "Remove it"],
+  hole: ["Make it 2 mm wider", "Countersink it for a screw", "Chamfer its edge", "Fill it in"],
+  round: ["Make it 5 mm taller", "Make it 2 mm wider", "Round its top edge", "Remove it"],
+  curved: ["Make it smoother", "Make it flatter", "Remove it"],
+};
+
+function setPicking(on) {
+  picker.on = on && Boolean(currentModel) && !assembly.on;
+  if (picker.on) {
+    setMeasuring(false);
+    setPrintMode(false);
+  }
+  editBtn.classList.toggle("active", picker.on);
+  renderer.domElement.style.cursor = picker.on ? "crosshair" : ruler.on ? "crosshair" : "";
+  if (!picker.on) closeEditPopup();
+  if (!busy && partInfoText) showViewerStatus(idleStatusText());
+}
+
+editBtn.addEventListener("click", () => setPicking(!picker.on));
+
+function clearPickHighlight() {
+  pickGroup.children.forEach((child) => child.geometry.dispose());
+  pickGroup.clear();
+}
+
+const AXES = [
+  [[1, 0, 0], "Right", "the right (+X)"],
+  [[-1, 0, 0], "Left", "the left (−X)"],
+  [[0, 1, 0], "Back", "the back (+Y)"],
+  [[0, -1, 0], "Front", "the front (−Y)"],
+  [[0, 0, 1], "Top", "up (+Z, the top)"],
+  [[0, 0, -1], "Bottom", "down (−Z, the bottom)"],
+];
+
+// The nearest axis direction a (model-space) vector points in.
+function facing(n) {
+  const [axis, short, long] = AXES.reduce((best, a) =>
+    n.x * a[0][0] + n.y * a[0][1] + n.z * a[0][2] > n.x * best[0][0] + n.y * best[0][1] + n.z * best[0][2] ? a : best
+  );
+  const aligned = n.x * axis[0] + n.y * axis[1] + n.z * axis[2] > 0.95;
+  const vector = `(${n.x.toFixed(2)}, ${n.y.toFixed(2)}, ${n.z.toFixed(2)})`;
+  return aligned ? { short, long } : { short: "Sloped", long: `mostly ${long}, along ${vector}` };
+}
+
+function axisName(a) {
+  const [x, y, z] = [Math.abs(a.x), Math.abs(a.y), Math.abs(a.z)];
+  if (z > 0.95) return "the Z axis (vertical)";
+  if (x > 0.95) return "the X axis";
+  if (y > 0.95) return "the Y axis";
+  return `the direction (${a.x.toFixed(2)}, ${a.y.toFixed(2)}, ${a.z.toFixed(2)})`;
+}
+
+// What the user clicked, for the AI: the smooth surface around the clicked
+// triangle (it grows across the part until a sharp edge), described in the
+// part's own coordinates (mm, Z up) as a flat face, a round hole, a round
+// outside surface, or a curved surface.
+function describeFeature(hit) {
+  const mesh = hit.object;
+  const position = mesh.geometry.getAttribute("position");
+  const index = mesh.geometry.index;
+  const count = (index ? index.count : position.count) / 3;
+  const corner = (t, k) =>
+    new THREE.Vector3().fromBufferAttribute(position, index ? index.getX(3 * t + k) : 3 * t + k).applyMatrix4(mesh.matrixWorld);
+  const triangle = new THREE.Triangle();
+  const corners = [];
+  const normals = [];
+  const areas = [];
+  for (let t = 0; t < count; t++) {
+    const c = [corner(t, 0), corner(t, 1), corner(t, 2)];
+    triangle.set(...c);
+    corners.push(c);
+    areas.push(triangle.getArea());
+    normals.push(triangle.getNormal(new THREE.Vector3()));
+  }
+  // Corners closer than 0.01 mm count as the same point: the mesh isn't welded.
+  const key = (v) => `${Math.round(v.x * 100)},${Math.round(v.y * 100)},${Math.round(v.z * 100)}`;
+  const byCorner = new Map();
+  corners.forEach((c, t) =>
+    c.forEach((v) => {
+      const k = key(v);
+      if (!byCorner.has(k)) byCorner.set(k, []);
+      byCorner.get(k).push(t);
+    })
+  );
+  const smooth = Math.cos(THREE.MathUtils.degToRad(25));
+  const region = new Set([hit.faceIndex]);
+  const queue = [hit.faceIndex];
+  while (queue.length && region.size < 50000) {
+    const t = queue.pop();
+    for (const v of corners[t]) {
+      for (const u of byCorner.get(key(v))) {
+        if (!region.has(u) && areas[u] > 0 && normals[u].dot(normals[t]) > smooth) {
+          region.add(u);
+          queue.push(u);
+        }
+      }
+    }
+  }
+
+  // Into the part's own frame (build123d: mm, Z up).
+  const toModel = currentModel.matrixWorld.clone().multiply(MODEL_TO_GLTF).invert();
+  const turn = new THREE.Matrix3().setFromMatrix4(toModel);
+  const points = [];
+  const pointNormals = [];
+  const highlight = [];
+  const modelCorners = [];
+  const centre = new THREE.Vector3();
+  const meanNormal = new THREE.Vector3();
+  let area = 0;
+  for (const t of region) {
+    const middle = corners[t][0].clone().add(corners[t][1]).add(corners[t][2]).divideScalar(3).applyMatrix4(toModel);
+    const normal = normals[t].clone().applyMatrix3(turn).normalize();
+    points.push(middle);
+    pointNormals.push(normal);
+    centre.addScaledVector(middle, areas[t]);
+    meanNormal.addScaledVector(normal, areas[t]);
+    area += areas[t];
+    highlight.push(...corners[t]);
+    modelCorners.push(...corners[t].map((v) => v.clone().applyMatrix4(toModel)));
+  }
+  centre.divideScalar(area || 1);
+  meanNormal.normalize();
+  const mm = (v) => v.toFixed(1);
+  const at = (v) => `(${mm(v.x)}, ${mm(v.y)}, ${mm(v.z)})`;
+
+  // Which labelled part of an assembly it's on, if any.
+  const labels = (versions[activeVersion] && versions[activeVersion].parts) || [];
+  let partName = null;
+  for (let o = mesh; o && o !== currentModel && !partName; o = o.parent) {
+    partName = labels.find((label) => THREE.PropertyBinding.sanitizeNodeName(label) === o.name) || null;
+  }
+  const finish = (feature) => ({
+    ...feature,
+    label: partName ? `${partName}: ${feature.label}` : feature.label,
+    description: partName ? `${feature.description}, on the part labelled "${partName}"` : feature.description,
+    points: highlight,
+  });
+
+  if (pointNormals.every((n) => n.dot(meanNormal) > 0.999)) {
+    const u = new THREE.Vector3().crossVectors(meanNormal, Math.abs(meanNormal.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize();
+    const w = new THREE.Vector3().crossVectors(meanNormal, u);
+    const spread = (axis) => {
+      const values = modelCorners.map((p) => p.dot(axis));
+      return Math.max(...values) - Math.min(...values);
+    };
+    const side = facing(meanNormal);
+    return finish({
+      kind: "flat",
+      label: `${side.short} face`,
+      description: `the flat face facing ${side.long}, centred at ${at(centre)} mm, about ${mm(spread(u))} × ${mm(spread(w))} mm`,
+    });
+  }
+
+  // A round surface's normals are all square to its axis, so every cross
+  // product of two of them lies along it. Summing them (turned to agree)
+  // gives the axis; a single pair can't, as opposite normals cross to nothing.
+  const sample = pointNormals.filter((_, i) => i % Math.ceil(pointNormals.length / 200) === 0);
+  const axis = new THREE.Vector3();
+  const cross = new THREE.Vector3();
+  for (let i = 0; i < sample.length; i++) {
+    for (let j = i + 1; j < sample.length; j++) {
+      cross.crossVectors(sample[i], sample[j]);
+      axis.addScaledVector(cross, cross.dot(axis) < 0 ? -1 : 1);
+    }
+  }
+  if (axis.length() > 1e-6) {
+    axis.normalize();
+    if (pointNormals.every((n) => Math.abs(n.dot(axis)) < 0.2)) {
+      const flatten = (v) => v.clone().addScaledVector(axis, -v.dot(axis));
+      const p = points.map(flatten);
+      const n = pointNormals.map((v) => flatten(v).normalize());
+      const meanP = p.reduce((s, v) => s.add(v), new THREE.Vector3()).divideScalar(p.length);
+      const meanN = n.reduce((s, v) => s.add(v), new THREE.Vector3()).divideScalar(n.length);
+      let top = 0;
+      let bottom = 0;
+      p.forEach((v, i) => {
+        const dn = n[i].clone().sub(meanN);
+        top += v.clone().sub(meanP).dot(dn);
+        bottom += dn.lengthSq();
+      });
+      // Each point sits `radius` out along its normal from the axis; a hole's
+      // normals point in, towards the axis, which makes the fit negative.
+      const radius = bottom > 1e-9 ? top / bottom : 0;
+      const along = modelCorners.map((v) => v.dot(axis));
+      const length = Math.max(...along) - Math.min(...along);
+      const through = meanP.clone().addScaledVector(meanN, -radius).addScaledVector(axis, (Math.max(...along) + Math.min(...along)) / 2);
+      const diameter = mm(2 * Math.abs(radius));
+      if (radius < 0) {
+        return finish({
+          kind: "hole",
+          label: `Ø${diameter} hole`,
+          description: `the round hole of diameter ${diameter} mm, its axis along ${axisName(axis)} through ${at(through)} mm, ${mm(length)} mm long`,
+        });
+      }
+      return finish({
+        kind: "round",
+        label: `Ø${diameter} round surface`,
+        description: `the round outside surface (a cylinder or boss) of diameter ${diameter} mm, its axis along ${axisName(axis)} through ${at(through)} mm, ${mm(length)} mm long`,
+      });
+    }
+  }
+  const side = facing(meanNormal);
+  return finish({
+    kind: "curved",
+    label: "Curved surface",
+    description: `the curved surface around ${at(centre)} mm, facing ${side.long}`,
+  });
+}
+
+function openEditPopup(feature, x, y) {
+  editTitle.textContent = `✏️ ${feature.label}`;
+  editChips.replaceChildren(
+    ...EDIT_CHIPS[feature.kind].map((text) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "edit-chip";
+      chip.textContent = text;
+      chip.addEventListener("click", () => submitEdit(text));
+      return chip;
+    })
+  );
+  editInput.value = "";
+  editPopup.hidden = false;
+  const left = Math.min(Math.max(12, x + 14), window.innerWidth - editPopup.offsetWidth - 12);
+  const top = Math.min(Math.max(70, y + 14), window.innerHeight - editPopup.offsetHeight - 12);
+  editPopup.style.left = `${left}px`;
+  editPopup.style.top = `${top}px`;
+  editInput.focus();
+}
+
+function closeEditPopup() {
+  editPopup.hidden = true;
+  picker.feature = null;
+  clearPickHighlight();
+}
+
+function submitEdit(text) {
+  const feature = picker.feature;
+  if (!text || !feature || busy) return;
+  setPicking(false);
+  runPrompt(
+    `Change only the feature I picked on the current part, ${feature.description}: ${text}. Keep everything else exactly as it is.`,
+    `✏️ ${feature.label}: ${text}`
+  );
+}
+
+editForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitEdit(editInput.value.trim());
+});
+
+// A click (not the end of an orbit drag) picks what's under the pointer.
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!picker.on || assembly.on || ruler.on || !pointerDownAt || e.button !== 0) return;
+  if (Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5) return;
+  const hit = modelHitAt(e);
+  if (!hit) {
+    closeEditPopup();
+    return;
+  }
+  const feature = describeFeature(hit);
+  picker.feature = feature;
+  clearPickHighlight();
+  pickGroup.add(new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(feature.points), pickMaterial));
+  openEditPopup(feature, e.clientX, e.clientY);
+});
+
+/* ---------------- 3D print check ---------------- */
+
+const PRINTERS = [
+  { name: "Bambu Lab X1 / P1 / A1", bed: [256, 256, 256] },
+  { name: "Bambu Lab A1 mini", bed: [180, 180, 180] },
+  { name: "Prusa MK4", bed: [250, 210, 220] },
+  { name: "Creality Ender-3", bed: [220, 220, 250] },
+  { name: "Elegoo Neptune 4", bed: [225, 225, 265] },
+];
+const MATERIALS = [
+  { name: "PLA", density: 1.24 },
+  { name: "PETG", density: 1.27 },
+  { name: "ABS", density: 1.04 },
+  { name: "ASA", density: 1.07 },
+  { name: "TPU", density: 1.21 },
+  { name: "Nylon", density: 1.14 },
+];
+const INFILLS = [10, 15, 20, 30, 50, 100];
+
+// The viewer's currency, with a typical price for 1 kg of filament in it.
+const CURRENCY = (() => {
+  const region = ((navigator.language || "").split("-")[1] || "").toUpperCase();
+  if (region === "IN") return { code: "INR", price: 1200 };
+  if (region === "GB") return { code: "GBP", price: 18 };
+  if (["DE", "FR", "ES", "IT", "NL", "BE", "AT", "IE", "PT", "FI", "GR"].includes(region)) return { code: "EUR", price: 20 };
+  return { code: "USD", price: 20 };
+})();
+
+const PRINT_SETTINGS_KEY = "jokercad-print";
+const printSettings = (() => {
+  const defaults = { printer: 0, material: 0, infill: 15, price: CURRENCY.price };
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem(PRINT_SETTINGS_KEY) || "{}") };
+  } catch {
+    return defaults;
+  }
+})();
+
+PRINTERS.forEach((p, i) => printerSelect.add(new Option(`${p.name} (${p.bed.join(" × ")} mm)`, String(i))));
+MATERIALS.forEach((m, i) => materialSelect.add(new Option(m.name, String(i))));
+INFILLS.forEach((v) => infillSelect.add(new Option(`${v}%`, String(v))));
+printerSelect.value = String(printSettings.printer);
+materialSelect.value = String(printSettings.material);
+infillSelect.value = String(printSettings.infill);
+priceInput.value = String(printSettings.price);
+priceLabel.textContent = `Filament price (${CURRENCY.code} per kg)`;
+
+for (const control of [printerSelect, materialSelect, infillSelect, priceInput]) {
+  control.addEventListener("change", () => {
+    printSettings.printer = Number(printerSelect.value);
+    printSettings.material = Number(materialSelect.value);
+    printSettings.infill = Number(infillSelect.value);
+    printSettings.price = Math.max(0, Number(priceInput.value) || 0);
+    try {
+      localStorage.setItem(PRINT_SETTINGS_KEY, JSON.stringify(printSettings));
+    } catch {}
+    renderPrintReport();
+  });
+}
+
+const printState = { on: false, rest: null, report: null };
+const printOverlay = new THREE.Group();
+scene.add(printOverlay);
+const overhangMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff5a6e,
+  transparent: true,
+  opacity: 0.8,
+  side: THREE.DoubleSide,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2,
+});
+const thinMaterial = new THREE.MeshBasicMaterial({ color: 0xffa94d, depthTest: false, transparent: true });
+const thinGeometry = new THREE.SphereGeometry(1, 10, 8);
+// Print frame (mm, Z up) to the viewer's (Y up): the same turn as MODEL_TO_GLTF, without its scale.
+const PRINT_TO_VIEWER = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+
+// The model as it sits in the viewer, in print terms: mm, Z up.
+function printTriangles() {
+  currentModel.updateMatrixWorld(true);
+  const out = [];
+  const v = new THREE.Vector3();
+  currentModel.traverse((child) => {
+    if (!child.isMesh || !shownInModel(child)) return;
+    const position = child.geometry.getAttribute("position");
+    const index = child.geometry.index;
+    const count = index ? index.count : position.count;
+    for (let i = 0; i < count; i++) {
+      v.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(child.matrixWorld);
+      out.push(v.x, -v.z, v.y);
+    }
+  });
+  return Float32Array.from(out);
+}
+
+function setPrintMode(on) {
+  on = on && Boolean(currentModel) && !assembly.on;
+  if (on === printState.on) return;
+  printState.on = on;
+  printBtn.classList.toggle("active", on);
+  printCard.hidden = !on;
+  if (on) {
+    setPicking(false);
+    // The check is for the part as designed, not part-way through its motion.
+    if (motion.rig) {
+      stopMotion(false);
+      if (motion.rig.value) {
+        setMotionValue(0);
+        settleMotion();
+      }
+      motionCard.hidden = true;
+    }
+    printState.rest = currentModel.quaternion.clone();
+    updatePrintCheck();
+  } else {
+    clearPrintOverlay();
+    if (currentModel && printState.rest && !currentModel.quaternion.equals(printState.rest)) {
+      currentModel.quaternion.copy(printState.rest);
+      placeModel(currentModel, false);
+      refreshHelpers();
+    }
+    printState.rest = null;
+    printState.report = null;
+    if (motion.rig) motionCard.hidden = false;
+  }
+}
+
+// A new model while the check is open: check that one instead.
+function printModelChanged() {
+  if (!printState.on) return;
+  printState.rest = currentModel.quaternion.clone();
+  if (motion.rig) motionCard.hidden = true;
+  updatePrintCheck();
+}
+
+function updatePrintCheck() {
+  if (!printState.on || !currentModel) return;
+  const tris = printTriangles();
+  printState.report = analyzePrint(tris);
+  drawPrintOverlay(tris, printState.report);
+  renderPrintReport();
+}
+
+function clearPrintOverlay() {
+  printOverlay.children.forEach((child) => child.geometry !== thinGeometry && child.geometry.dispose());
+  printOverlay.clear();
+}
+
+// Red faces needing support and orange dots at thin walls, back in the viewer's frame.
+function drawPrintOverlay(tris, report) {
+  clearPrintOverlay();
+  if (report.overhang.length) {
+    const positions = new Float32Array(report.overhang.length * 9);
+    report.overhang.forEach((t, i) => {
+      for (let k = 0; k < 3; k++) {
+        const o = 9 * t + 3 * k;
+        positions.set([tris[o], tris[o + 2], -tris[o + 1]], 9 * i + 3 * k);
+      }
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    printOverlay.add(new THREE.Mesh(geometry, overhangMaterial));
+  }
+  const size = (lastFrame ? lastFrame.dist / 2.1 : 50) * 0.01;
+  for (const { point } of report.thin.slice(0, 200)) {
+    const dot = new THREE.Mesh(thinGeometry, thinMaterial);
+    dot.position.set(point[0], point[2], -point[1]);
+    dot.scale.setScalar(size);
+    dot.renderOrder = 9;
+    printOverlay.add(dot);
+  }
+}
+
+function formatDuration(minutes) {
+  if (minutes < 60) return `${Math.max(1, Math.round(minutes))} min`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} h ${Math.round(minutes - hours * 60)} min`;
+}
+
+function renderPrintReport() {
+  const report = printState.report;
+  if (!report) return;
+  const printer = PRINTERS[printSettings.printer] || PRINTERS[0];
+  const material = MATERIALS[printSettings.material] || MATERIALS[0];
+  const [sx, sy, sz] = report.size;
+  const [bx, by, bz] = printer.bed;
+  const fits = sz <= bz && ((sx <= bx && sy <= by) || (sx <= by && sy <= bx));
+
+  const checks = [
+    fits
+      ? ["ok", `Fits the bed (${sx.toFixed(0)} × ${sy.toFixed(0)} × ${sz.toFixed(0)} mm)`]
+      : ["bad", `Too big for this printer: ${sx.toFixed(0)} × ${sy.toFixed(0)} × ${sz.toFixed(0)} mm`],
+  ];
+  const supportArea = report.overhangArea / 100;
+  checks.push(
+    supportArea < 0.5 ? ["ok", "No supports needed"] : ["warn", `Needs supports under ${supportArea.toFixed(1)} cm² (red)`]
+  );
+  if (report.thin.length) {
+    checks.push([
+      "warn",
+      `Walls thinner than 0.8 mm in ${report.thin.length} spot${report.thin.length === 1 ? "" : "s"} (orange); thinnest ≈ ${report.thinnest.toFixed(2)} mm`,
+    ]);
+  } else if (Number.isFinite(report.thinnest)) {
+    checks.push(["ok", `Walls thick enough (thinnest ≈ ${report.thinnest.toFixed(1)} mm)`]);
+  }
+  if (report.contactArea < 25) checks.push(["warn", "Very little of it touches the bed: try Auto-orient, or add a brim"]);
+  printChecks.replaceChildren(
+    ...checks.map(([level, text]) => {
+      const item = document.createElement("li");
+      item.className = `check-${level}`;
+      item.textContent = text;
+      return item;
+    })
+  );
+
+  // Rough slicer maths: walls and top/bottom as a 0.9 mm shell, infill inside
+  // it, sparse supports under the overhangs, 1.75 mm filament.
+  const shell = Math.min(report.volume, report.area * 0.9);
+  const infill = (report.volume - shell) * (printSettings.infill / 100);
+  const support = report.overhangArea * report.overhangHeight * 0.12;
+  const extruded = shell + infill + support;
+  const grams = (extruded / 1000) * material.density;
+  const metres = extruded / (Math.PI * 0.875 * 0.875) / 1000;
+  const minutes = (extruded / 10) * 1.25 / 60 + (sz / 0.2) * 2 / 60;
+  const cost = (grams / 1000) * printSettings.price;
+  const money = new Intl.NumberFormat(navigator.language, {
+    style: "currency",
+    currency: CURRENCY.code,
+    maximumFractionDigits: cost < 10 ? 2 : 0,
+  }).format(cost);
+  printEstimate.textContent = `≈ ${grams.toFixed(0)} g of ${material.name} · ${metres.toFixed(1)} m · ${money} · about ${formatDuration(minutes)}`;
+}
+
+function autoOrient() {
+  if (!printState.on) return;
+  const { rotation } = bestOrientation(printTriangles());
+  const [a, b, c, d, e, f, g, h, i] = rotation;
+  const turn = new THREE.Matrix4().set(a, b, c, 0, d, e, f, 0, g, h, i, 0, 0, 0, 0, 1);
+  // The rotation is in print terms; turn it into the viewer's.
+  const inViewer = PRINT_TO_VIEWER.clone().multiply(turn).multiply(PRINT_TO_VIEWER.clone().invert());
+  currentModel.quaternion.premultiply(new THREE.Quaternion().setFromRotationMatrix(inViewer));
+  placeModel(currentModel, true);
+  refreshHelpers();
+  updatePrintCheck();
+}
+
+function orientAsDesigned() {
+  if (!printState.on || !printState.rest) return;
+  currentModel.quaternion.copy(printState.rest);
+  placeModel(currentModel, true);
+  refreshHelpers();
+  updatePrintCheck();
+}
+
+function export3mf() {
+  if (!printState.on) return;
+  const printer = PRINTERS[printSettings.printer] || PRINTERS[0];
+  const file = make3mf(printTriangles(), [printer.bed[0] / 2, printer.bed[1] / 2]);
+  downloadBlob(new Blob([file], { type: "model/3mf" }), `${exportName()}.3mf`);
+}
+
+printBtn.addEventListener("click", () => setPrintMode(!printState.on));
+printCloseBtn.addEventListener("click", () => setPrintMode(false));
+orientBtn.addEventListener("click", autoOrient);
+orientResetBtn.addEventListener("click", orientAsDesigned);
+export3mfBtn.addEventListener("click", export3mf);
 
 /* ---------------- motion ---------------- */
 
@@ -1659,8 +2334,7 @@ function renderPartLog(part) {
     const el = document.createElement("div");
     chatLog.append(el);
     if (entry.kind === "user") {
-      el.className = "entry entry-user";
-      el.textContent = entry.text;
+      fillUserEntry(el, entry.text, entry.image);
     } else if (entry.kind === "version" && versions[entry.version]) {
       setEntrySuccess(el, entry.text);
       decorateVersionEntry(el, entry.version);
@@ -1895,6 +2569,8 @@ async function enterAssembly() {
   setCodeDrawer(false);
   setExportMenu(false);
   resetMotion();
+  setPrintMode(false);
+  setPicking(false);
   assembly.on = true;
   document.body.classList.add("assembly-mode");
   assemblyPanel.hidden = false;
@@ -1947,6 +2623,8 @@ async function rebuildAssembly(reframe) {
   setCurrentObject(root, { reframe, recenter: false, scale: 1 });
   modelTools.forEach((btn) => (btn.disabled = !root.children.length));
   shareBtn.disabled = true;
+  // Part-only tools: they work on one part's code.
+  editBtn.disabled = printBtn.disabled = organicBtn.disabled = true;
   paramsCard.hidden = true;
   partsCard.hidden = true;
   selectInstance(assembly.selected);
@@ -2329,10 +3007,13 @@ const VIEW_KEYS = { 1: "iso", 2: "top", 3: "front", 4: "right" };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     // Closes the most recently opened thing first.
-    if (!exportMenu.hidden) setExportMenu(false);
+    if (!editPopup.hidden) closeEditPopup();
+    else if (!exportMenu.hidden) setExportMenu(false);
     else if (!projectMenu.hidden) setProjectMenu(false);
     else if (codeDrawer.classList.contains("is-open")) setCodeDrawer(false);
     else if (assembly.mating) setMating(false);
+    else if (picker.on) setPicking(false);
+    else if (printState.on) setPrintMode(false);
     else if (ruler.on) setMeasuring(false);
     else if (section.on) setSection(false);
     else if (assembly.selected) selectInstance(null);
@@ -2351,6 +3032,8 @@ document.addEventListener("keydown", (e) => {
   else if (key === "w") toggleWireframe();
   else if (key === "s") setSection(!section.on);
   else if (key === "m") setMeasuring(!ruler.on);
+  else if (key === "e" && !assembly.on) setPicking(!picker.on);
+  else if (key === "p" && !assembly.on) setPrintMode(!printState.on);
   else if (assembly.on && key === "g") setTransformMode("translate");
   else if (assembly.on && key === "r") setTransformMode("rotate");
   else if (assembly.on && assembly.selected && (key === "delete" || key === "backspace")) removeInstance(assembly.selected);

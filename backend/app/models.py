@@ -13,6 +13,8 @@ class GenerateRequest(BaseModel):
     # The browser keeps the conversation and sends it with each request, so the
     # server holds no per-user state between requests (serverless-friendly).
     history: list[ChatMessage] = Field(default_factory=list, max_length=50)
+    # A reference photo or sketch, base64-encoded (the browser shrinks it first).
+    image: str | None = Field(default=None, max_length=5_000_000)
 
 
 class RunRequest(BaseModel):

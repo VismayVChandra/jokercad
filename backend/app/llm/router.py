@@ -103,18 +103,20 @@ class LLMRouter:
             p for p in dict.fromkeys(self.review_providers + self.providers) if getattr(p, "supports_images", False)
         ]
 
-    def generate(self, system_prompt: str, messages: list[dict]) -> tuple[str, str]:
-        """Returns (text, provider_name_used)."""
-        return self._first_answer(self.providers, system_prompt, messages, review=False)
+    def generate(self, system_prompt: str, messages: list[dict], images: list[bytes] | None = None) -> tuple[str, str]:
+        """Returns (text, provider_name_used). With images, only providers that can see are asked."""
+        providers = self.vision_providers if images else self.providers
+        return self._first_answer(providers, system_prompt, messages, review=False, images=images)
 
     def review(self, system_prompt: str, messages: list[dict]) -> str:
         """A quick check of a built part; providers may use a smaller model for it."""
         text, _ = self._first_answer(self.review_providers, system_prompt, messages, review=True)
         return text
 
-    def review_visual(self, system_prompt: str, messages: list[dict], image: bytes) -> str:
-        """A check of a built part that also looks at a PNG picture of it."""
-        text, _ = self._first_answer(self.vision_providers, system_prompt, messages, review=True, images=[image])
+    def review_visual(self, system_prompt: str, messages: list[dict], images: bytes | list[bytes]) -> str:
+        """A check of a built part that also looks at pictures (of it, and any reference)."""
+        images = [images] if isinstance(images, bytes) else images
+        text, _ = self._first_answer(self.vision_providers, system_prompt, messages, review=True, images=images)
         return text
 
     def _first_answer(

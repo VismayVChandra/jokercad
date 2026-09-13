@@ -31,6 +31,9 @@ above), FRONT (looking toward +Y: X to the right, Z up), TOP (looking down: X to
 Y up) and RIGHT (looking toward -X: Y to the right, Z up). An assembly's separate parts have
 different colours.
 
+When the user gave a reference photo or sketch, it comes first and the picture of the
+built part second; the part should then match the reference's shape and features too.
+
 Look at the picture first. Flag only clear, specific mismatches with the requests:
 - a requested feature that's missing or clearly the wrong shape (a hole, slot, lip, flange,
   teeth, groove, arm, finger, support);
