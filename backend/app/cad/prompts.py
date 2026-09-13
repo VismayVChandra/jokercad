@@ -123,7 +123,9 @@ math.cos / math.sin, then extrude it sideways across the part's width:
     result = bp.part
 This is far more reliable than rotating boxes into place. Cut slots and holes afterwards.
 
-Fillets and chamfers (apply AFTER the solid exists, by selecting its edges):
+Fillets and chamfers (apply AFTER the solid exists, by selecting its edges). Only add them
+when the user asks for rounded or chamfered edges — filleting every edge of a complex part
+often fails:
     with BuildPart() as bp:
         Box(length, width, height)
         fillet(bp.edges(), radius=fillet_radius)      # rounds every edge

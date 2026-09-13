@@ -15,20 +15,27 @@ class GeminiProvider(LLMProvider):
 
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "")
-        self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        self.timeout = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+        self.model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+        # Gemini 3 thinks before answering. At its default level a complex part
+        # took ~80 s; at "low" ~9 s, with code of similar quality. Empty turns
+        # the setting off, for models that don't support a thinking level.
+        self.thinking_level = os.getenv("GEMINI_THINKING_LEVEL", "low")
+        self.timeout = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "60"))
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
     def generate(self, system_prompt: str, messages: list[dict], review: bool = False) -> str:
+        config = {"temperature": 0.2}
+        if self.thinking_level:
+            config["thinkingConfig"] = {"thinkingLevel": self.thinking_level}
         body = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [
                 {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
                 for m in messages
             ],
-            "generationConfig": {"temperature": 0.2},
+            "generationConfig": config,
         }
         try:
             resp = requests.post(
