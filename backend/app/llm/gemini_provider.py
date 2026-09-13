@@ -21,7 +21,7 @@ class GeminiProvider(LLMProvider):
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    def generate(self, system_prompt: str, messages: list[dict]) -> str:
+    def generate(self, system_prompt: str, messages: list[dict], review: bool = False) -> str:
         body = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
             "contents": [

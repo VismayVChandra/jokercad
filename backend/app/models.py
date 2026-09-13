@@ -26,3 +26,5 @@ class GenerateResponse(BaseModel):
     glb_base64: str | None = None
     error: str | None = None
     attempts: int = 0
+    # Set when the part built but the automatic review still sees a problem.
+    note: str | None = None

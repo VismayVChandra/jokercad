@@ -24,6 +24,10 @@ def _explain(provider: str, error: str) -> str:
             f"That request was too large for {name}'s free tier, which limits tokens per minute. "
             "Try a shorter prompt, or reload the page to start a fresh conversation."
         )
+    if "per day" in text:
+        retry = re.search(r"try again in ([0-9hms.]+)", text)
+        when = f" {name} says to try again in {retry.group(1).rstrip('.')}." if retry else ""
+        return f"{name}'s free daily token allowance for this model is used up.{when}"
     if re.search(r"\b429\b", text) or "rate limit" in text or "rate_limit" in text:
         return f"{name}'s free-tier rate limit was reached. Wait a minute, then try again."
     if re.search(r"\b401\b", text) or "api key" in text:
@@ -60,15 +64,21 @@ class LLMRouter:
 
     def generate(self, system_prompt: str, messages: list[dict]) -> tuple[str, str]:
         """Returns (text, provider_name_used)."""
+        return self._first_answer(system_prompt, messages, review=False)
+
+    def review(self, system_prompt: str, messages: list[dict]) -> str:
+        """A quick check of a built part; providers may use a smaller model for it."""
+        text, _ = self._first_answer(system_prompt, messages, review=True)
+        return text
+
+    def _first_answer(self, system_prompt: str, messages: list[dict], review: bool) -> tuple[str, str]:
         attempts: dict[str, str] = {}
         for provider in self.providers:
             if not provider.is_configured():
                 attempts[provider.name] = _NOT_CONFIGURED
                 continue
             try:
-                text = provider.generate(system_prompt, messages)
-                return text, provider.name
+                return provider.generate(system_prompt, messages, review=review), provider.name
             except ProviderError as e:
                 attempts[provider.name] = str(e)
-                continue
         raise RouterExhaustedError(attempts)

@@ -113,6 +113,16 @@ inside `with BuildPart()`. Choose add or cut with their `mode=` argument; don't 
 result and add it again — there is no `bp.add(...)` method. Don't pass the sketch builder
 either (`revolve(sk, ...)`): the operation already uses the sketch you just drew.
 
+Side-profile parts (stands, brackets, wedges, ramps, L- and T-sections): draw the side view
+as one closed polygon on Plane.XZ — x across, y up — computing any sloped points with
+math.cos / math.sin, then extrude it sideways across the part's width:
+    with BuildPart() as bp:
+        with BuildSketch(Plane.XZ):
+            Polygon(*side_points, align=None)
+        extrude(amount=width / 2, both=True)
+    result = bp.part
+This is far more reliable than rotating boxes into place. Cut slots and holes afterwards.
+
 Fillets and chamfers (apply AFTER the solid exists, by selecting its edges):
     with BuildPart() as bp:
         Box(length, width, height)

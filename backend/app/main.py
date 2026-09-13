@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .cad.executor import extract_code, run_build123d_code
 from .cad.prompts import SYSTEM_PROMPT, build_repair_prompt
+from .cad.review import REVIEW_PROMPT, build_review_request, parse_verdict
 from .llm.router import LLMRouter, RouterExhaustedError
 from .models import GenerateRequest, GenerateResponse, RunRequest
 
@@ -61,6 +62,8 @@ INPUT_TOKEN_BUDGET = int(os.getenv("INPUT_TOKEN_BUDGET", "5000"))
 MAX_ERROR_CHARS = 1500
 # base64 adds a third on top of this, and Vercel caps function responses at 4.5 MB.
 MAX_GLB_BYTES = 3_000_000
+# After a part builds, a second model checks it against the request.
+REVIEW_PARTS = os.getenv("REVIEW_PARTS", "1") != "0"
 
 # Only generation is gated: it's what runs model-written code and spends LLM
 # quota. The page itself stays viewable without the password.
@@ -153,11 +156,14 @@ def _wants_flange(prompt: str) -> bool:
 # alone doesn't count: the usual mistake is calling a slice of the body "the flange".
 _FLANGE_SIZE_VAR = re.compile(r"^\w*flange\w*(diameter|radius|width|length|size)\w*\s*=", re.MULTILINE)
 
+# (does the prompt ask for it, does the code have it, what to tell the model if
+# not, what to tell the reviewer so it doesn't undo the feature)
 _FEATURE_CHECKS = [
     (
         _wants_spur_gear,
         lambda code: "spur_gear(" in code,
         "The gear teeth were drawn by hand. Use the built-in spur_gear() helper for the gear instead.",
+        "The gear comes from a tested involute-gear helper; its tooth shape and tip diameter are correct.",
     ),
     (
         _wants_flange,
@@ -165,8 +171,32 @@ _FEATURE_CHECKS = [
         "The prompt asks for a flange, but the code has none. Build the flange as a separate plate wider than "
         "the body, with its size (e.g. flange_diameter) and thickness as top-level parameters, and put the "
         "mounting holes through the flange outside the body.",
+        "The request asks for a flange, so the part is meant to be wider than the body diameter the user gave: "
+        "the flange sticks out beyond the body and its mounting holes sit outside the body. Don't flag the "
+        "overall width or the flange.",
     ),
 ]
+
+
+def _review_notes(prompt: str) -> list[str]:
+    return [note for wants, _, _, note in _FEATURE_CHECKS if wants(prompt)]
+
+
+def _review_part(requests: list[str], code: str, stats: dict | None, notes: list[str]) -> str | None:
+    """What the reviewer thinks is wrong with a built part, or None if it looks right.
+
+    Returns None as well when reviews are off, there are no measurements, or the
+    reviewer can't be reached: the review is a safety net, never a blocker.
+    """
+    if not REVIEW_PARTS or not stats or "size" not in stats:
+        return None
+    try:
+        request = build_review_request(requests, code, stats, notes)
+        reply = router.review(REVIEW_PROMPT, [{"role": "user", "content": request}])
+    except RouterExhaustedError as e:
+        logger.warning("review skipped: %s", e)
+        return None
+    return parse_verdict(reply)
 
 
 def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[dict]:
@@ -211,11 +241,16 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], prompt)
     base_messages = history + [{"role": "user", "content": prompt}]
     messages = base_messages
-    required_features = [(has, message) for wants, has, message in _FEATURE_CHECKS if wants(prompt)]
+    required_features = [(has, message) for wants, has, message, _ in _FEATURE_CHECKS if wants(prompt)]
+    requests_so_far = [m["content"] for m in history if m["role"] == "user"] + [prompt]
+    review_notes = _review_notes(prompt)
 
     provider_used = None
     code = None
     last_error = None
+    # The latest part that built but that the review objected to. It's returned,
+    # with the objection as a note, if no later attempt does better.
+    flagged: GenerateResponse | None = None
 
     try:
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
@@ -223,7 +258,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                 text, provider_used = router.generate(SYSTEM_PROMPT, messages)
             except RouterExhaustedError as e:
                 logger.warning("attempt=%d all providers failed: %s", attempt, e)
-                return GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
+                return flagged or GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
 
             code = extract_code(text)
 
@@ -238,7 +273,16 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
             if result.ok:
                 logger.info("provider=%s attempt=%d ok (%d bytes)", provider_used, attempt, len(result.glb_bytes))
-                return _model_response(result.glb_bytes, code, provider_used, attempt)
+                response = _model_response(result.glb_bytes, code, provider_used, attempt)
+                problem = _review_part(requests_so_far, code, result.stats, review_notes) if response.ok else None
+                if not problem:
+                    return response
+                logger.info("provider=%s attempt=%d review flagged: %s", provider_used, attempt, problem[:120])
+                response.note = problem
+                flagged = response
+                last_error = f"The part built, but a check against the request found a problem: {problem}"
+                messages = _repair_messages(base_messages, code, last_error)
+                continue
 
             if not result.retryable:
                 logger.error("CAD engine unavailable: %s", result.error)
@@ -251,8 +295,12 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
             messages = _repair_messages(base_messages, code, last_error)
     except Exception as e:
         logger.exception("unexpected error")
-        return GenerateResponse(ok=False, provider_used=provider_used, code=code, error=f"Unexpected server error: {e}")
+        return flagged or GenerateResponse(
+            ok=False, provider_used=provider_used, code=code, error=f"Unexpected server error: {e}"
+        )
 
+    if flagged:
+        return flagged
     last_line = (last_error or "").strip().splitlines()[-1] if last_error and last_error.strip() else "unknown error"
     return GenerateResponse(
         ok=False,

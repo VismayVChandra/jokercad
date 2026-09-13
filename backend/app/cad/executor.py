@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -53,6 +54,22 @@ if result.volume <= 1e-6:
 if hasattr(result, "is_valid") and not result.is_valid:
     raise RuntimeError("`result` is not a valid/manifold solid (self-intersecting or malformed geometry).")
 
+# Measurements for the review step; never allowed to break the build.
+try:
+    _box = result.bounding_box()
+    _stats = {{
+        "size": [_box.size.X, _box.size.Y, _box.size.Z],
+        "min": [_box.min.X, _box.min.Y, _box.min.Z],
+        "max": [_box.max.X, _box.max.Y, _box.max.Z],
+        "volume": result.volume,
+        "solids": len(result.solids()),
+    }}
+except Exception:
+    _stats = {{}}
+import json as _json
+with open(r"{stats_path}", "w", encoding="utf-8") as _stats_file:
+    _json.dump(_stats, _stats_file)
+
 from build123d import export_gltf
 export_gltf(result, r"{glb_path}", binary=True)
 """
@@ -67,6 +84,8 @@ class ExecutionResult:
     # False when the failure is environmental (CAD engine won't load), so
     # asking the LLM to "fix" its code would just waste calls.
     retryable: bool = True
+    # Bounding box, volume and solid count of the built part, when available.
+    stats: dict | None = None
 
 
 def extract_code(llm_text: str) -> str:
@@ -102,10 +121,13 @@ def run_build123d_code(code: str) -> ExecutionResult:
     # writable, and nothing needs to outlive the request.
     with tempfile.TemporaryDirectory(prefix="jokercad-") as work_dir:
         glb_path = Path(work_dir) / "part.glb"
+        stats_path = Path(work_dir) / "stats.json"
         script_path = Path(work_dir) / "run.py"
         shutil.copyfile(_PARTS_LIBRARY, Path(work_dir) / "jokercad_parts.py")
         script_path.write_text(
-            _RUNNER_TEMPLATE.format(user_code=code, glb_path=glb_path, engine_exit=_ENGINE_UNAVAILABLE_EXIT),
+            _RUNNER_TEMPLATE.format(
+                user_code=code, glb_path=glb_path, stats_path=stats_path, engine_exit=_ENGINE_UNAVAILABLE_EXIT
+            ),
             encoding="utf-8",
         )
 
@@ -135,4 +157,5 @@ def run_build123d_code(code: str) -> ExecutionResult:
         if not glb_path.exists():
             return ExecutionResult(ok=False, code=code, error="Script ran but did not produce a GLB file.")
 
-        return ExecutionResult(ok=True, code=code, glb_bytes=glb_path.read_bytes())
+        stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else None
+        return ExecutionResult(ok=True, code=code, glb_bytes=glb_path.read_bytes(), stats=stats or None)

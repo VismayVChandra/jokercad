@@ -16,7 +16,7 @@ class OllamaProvider(LLMProvider):
         # Always "configured" — availability is checked live in generate().
         return True
 
-    def generate(self, system_prompt: str, messages: list[dict]) -> str:
+    def generate(self, system_prompt: str, messages: list[dict], review: bool = False) -> str:
         try:
             resp = requests.post(
                 f"{self.host}/api/chat",

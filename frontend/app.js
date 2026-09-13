@@ -686,6 +686,13 @@ form.addEventListener("submit", async (e) => {
     setEntrySuccess(pending, `Built via ${data.provider_used}${retryNote}`);
     setProviderBadge(data.provider_used);
     addVersion(pending, data.code, base64ToBytes(data.glb_base64), true);
+    if (data.note) {
+      // The part built, but the automatic review still sees a problem.
+      const noteEl = document.createElement("div");
+      chatLog.appendChild(noteEl);
+      setEntryError(noteEl, `Self-check: ${data.note}`);
+      noteEl.classList.replace("is-error", "is-warning");
+    }
   } else if (data) {
     setEntryError(pending, data.error);
     if (data.code) codeView.textContent = data.code;
