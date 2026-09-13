@@ -36,10 +36,11 @@ def _explain(provider: str, error: str) -> str:
             f"That request was too large for {name}'s free tier, which limits tokens per minute. "
             "Try a shorter prompt, or reload the page to start a fresh conversation."
         )
-    if "per day" in text:
-        retry = re.search(r"try again in ([0-9hms.]+)", text)
+    # Groq says "tokens per day"; Gemini names a "...PerDay..." quota.
+    if "per day" in text or "perday" in text:
+        retry = re.search(r"(?:try again|retry) in ([0-9hms.]+)", text)
         when = f" {name} says to try again in {_pretty_wait(retry.group(1).rstrip('.'))}." if retry else ""
-        return f"{name}'s free daily token allowance for this model is used up.{when}"
+        return f"{name}'s free daily allowance is used up.{when}"
     if re.search(r"\b429\b", text) or "rate limit" in text or "rate_limit" in text:
         return f"{name}'s free-tier rate limit was reached. Wait a minute, then try again."
     if re.search(r"\b404\b", text) or "not_found" in text or "no longer available" in text:

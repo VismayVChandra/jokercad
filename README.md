@@ -30,6 +30,9 @@ attempts.
 - **LLM**: a provider router tries **Groq** (free tier) → **Gemini** (free
   tier) → **Ollama** (local, no key) in order, falling through automatically
   if one is unconfigured, rate-limited, or down. You only need one of them.
+  Free tiers limit each model separately, so each provider also falls back
+  to its other models (`GROQ_FALLBACK_MODELS`, `GEMINI_FALLBACK_MODELS`)
+  before giving up.
 - **Frontend**: Three.js via CDN, no build step.
 - **Hosting**: runs on Vercel's free Hobby plan (see below).
 
