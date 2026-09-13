@@ -20,6 +20,11 @@ Without Gemini, a text-only check of the code and measurements runs instead.
 - **Edit dimensions by hand**: every size the code exposes shows up as a
   parameter; changing one rebuilds the part without an AI call.
 - **Version history**: click any earlier ✓ to go back to it.
+- **Organic** (✨ in the toolbar): the AI reshapes the current part with
+  smooth, sculpted curves (splines, lofts, tapers) and rounds every edge with
+  the built-in `soften()` helper, keeping holes, bores and main sizes. It's a
+  new version, so the raw one is a click away, and `fillet_radius` shows up as
+  an editable parameter.
 - **Section view** (`S`): cut the part open along X, Y or Z to see bores and
   wall thicknesses.
 - **Measure** (`M`): click two points for the distance and its X/Y/Z

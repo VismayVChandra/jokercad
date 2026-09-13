@@ -80,6 +80,25 @@ relative to each other) — see the clamp example at the end:
 - Give every part a short unique label, then return them together:
   `result = Compound(label="gripper", children=[base_part, left_arm, right_arm, *pins])`.
 
+Organic, sculpted or ergonomic parts (when asked for an organic, smooth or sculpted look):
+- Keep every hole, bore, pivot and mounting face exactly where it is, and the main sizes.
+- Shape the form with curves instead of boxes: profiles of arcs and splines, revolved or
+  extruded; lofts between sections (a circle at the base to an ellipse higher up); tapers.
+- Finish by rounding every edge with the built-in helper, outside any builder:
+  `result = soften(result, fillet_radius)`, with fillet_radius a top-level parameter of
+  about a tenth of the thinnest wall. It never fails: edges that can't take the radius get
+  a smaller one or stay sharp. It also works on an assembly, part by part.
+      with BuildPart() as bp:          # loft: round base flowing into an oval top
+          with BuildSketch(Plane.XY):
+              Circle(base_radius)
+          with BuildSketch(Plane.XY.offset(height)):
+              Ellipse(top_x_radius, top_y_radius)
+          loft()
+      with BuildSketch(Plane.XZ):      # a smooth closed outline through points
+          with BuildLine():
+              Spline(*outline_points, periodic=True)
+          make_face()
+
 build123d cheat-sheet (builder mode):
 
 Solid primitives are centred on the origin by default. Inside `with BuildPart() as bp:`,
@@ -147,7 +166,7 @@ This is far more reliable than rotating boxes into place. Cut slots and holes af
 
 Fillets and chamfers (apply AFTER the solid exists, by selecting its edges). Only add them
 when the user asks for rounded or chamfered edges — filleting every edge of a complex part
-often fails:
+often fails; for an organic look, use soften() instead (see above):
     with BuildPart() as bp:
         Box(length, width, height)
         fillet(bp.edges(), radius=fillet_radius)      # rounds every edge

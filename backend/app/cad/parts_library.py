@@ -2,7 +2,76 @@
 # this file next to each generated script as `jokercad_parts` and star-imports it.
 import math
 
-__all__ = ["involute_gear_outline", "spur_gear"]
+__all__ = ["involute_gear_outline", "soften", "spur_gear"]
+
+# Edges rounded one at a time, at most, when a part won't take one radius on
+# every edge at once; each attempt costs a fillet operation.
+_MAX_SINGLE_EDGES = 120
+
+
+def _shrinking(radius, smallest):
+    radii = []
+    while radius >= smallest and len(radii) < 5:
+        radii.append(radius)
+        radius *= 0.6
+    return radii
+
+
+def _try_fillet(part, edges, radius):
+    """The part with the edges rounded, or None if the kernel can't do it."""
+    from build123d import Compound, Part
+
+    try:
+        rounded = part.fillet(radius, list(edges))
+        if rounded.is_valid and rounded.volume > 0:
+            return Part(Compound([rounded]).wrapped)
+    except Exception:
+        pass
+    return None
+
+
+def soften(part, radius, min_radius=0.2):
+    """Rounds every edge of a finished part (or of each part of an assembly) for a
+    smooth, organic look. Tries `radius` on all edges, then smaller radii; if the
+    part still won't take it, rounds the edges one at a time, longest first, each
+    with the largest radius that fits, and leaves the rest sharp. Never raises:
+    at worst the part comes back unchanged."""
+    from build123d import Compound
+
+    if radius <= 0:
+        return part
+    children = list(getattr(part, "children", None) or [])
+    if children:
+        softened = []
+        for child in children:
+            new = soften(child, radius, min_radius)
+            new.label = child.label
+            softened.append(new)
+        return Compound(label=part.label, children=softened)
+
+    try:
+        radii = _shrinking(radius, min_radius)
+        for r in radii:
+            rounded = _try_fillet(part, part.edges(), r)
+            if rounded is not None:
+                return rounded
+
+        current = part
+        for edge in sorted(part.edges(), key=lambda e: -e.length)[:_MAX_SINGLE_EDGES]:
+            # Earlier fillets trim the edges next to them, so find this edge
+            # again in the part as it is now by its centre, allowing for that.
+            target = edge.center()
+            match = min(current.edges(), key=lambda e: (e.center() - target).length)
+            if (match.center() - target).length > 0.6 * radius + 1e-3:
+                continue
+            for r in radii[:3]:
+                rounded = _try_fillet(current, [match], r)
+                if rounded is not None:
+                    current = rounded
+                    break
+        return current
+    except Exception:
+        return part
 
 
 def _polar(radius: float, angle: float) -> tuple[float, float]:

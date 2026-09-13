@@ -1048,6 +1048,17 @@ button {
   }
 }
 
+/* ---------- organic ---------- */
+
+.organic-btn:not(:disabled) {
+  color: #e7b8ff;
+}
+
+.organic-btn:hover:not(:disabled) {
+  background: rgba(214, 140, 255, 0.14);
+  color: #f1d4ff;
+}
+
 /* ---------- export menu ---------- */
 
 .tool-btn .chevron {

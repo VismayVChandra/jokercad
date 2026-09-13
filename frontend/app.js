@@ -33,6 +33,7 @@ const closeCodeBtn = document.getElementById("closeCodeBtn");
 const copyCodeBtn = document.getElementById("copyCodeBtn");
 const wireframeBtn = document.getElementById("wireframeBtn");
 const sectionBtn = document.getElementById("sectionBtn");
+const organicBtn = document.getElementById("organicBtn");
 const measureBtn = document.getElementById("measureBtn");
 const exportBtn = document.getElementById("exportBtn");
 const exportMenu = document.getElementById("exportMenu");
@@ -791,21 +792,37 @@ document.querySelectorAll(".chip").forEach((chip) => {
   });
 });
 
-form.addEventListener("submit", async (e) => {
+form.addEventListener("submit", (e) => {
   e.preventDefault();
   const prompt = input.value.trim();
   if (!prompt || busy) return;
-
-  addUserEntry(prompt);
-  recordLog({ kind: "user", text: prompt });
   input.value = "";
   autoResize();
+  runPrompt(prompt);
+});
+
+// Asked of the model by the Organic button; the chat shows ORGANIC_LABEL instead.
+const ORGANIC_PROMPT =
+  "Make this part organic. Keep every feature, hole, bore, pivot and mounting face where it is, and keep " +
+  "the main dimensions, but give it a smooth, sculpted form: replace flat slabs and hard boxes with curved " +
+  "profiles (arcs, splines, ellipses), taper or loft sections where it suits the part, blend where pieces " +
+  "meet, and finish with result = soften(result, fillet_radius), with fillet_radius as a top-level parameter.";
+const ORGANIC_LABEL = "✨ Make it organic";
+
+organicBtn.addEventListener("click", () => {
+  if (!busy && !assembly.on && versions.length) runPrompt(ORGANIC_PROMPT, ORGANIC_LABEL);
+});
+
+// shownAs: what the chat shows for the prompt, when not the prompt itself.
+async function runPrompt(prompt, shownAs = prompt) {
+  addUserEntry(shownAs);
+  recordLog({ kind: "user", text: shownAs });
   sendBtn.classList.add("is-loading");
   setBusy(true, "Building part…");
   const pending = addThinkingEntry("Generating…");
 
   const { data, unauthorized } = await callApi("/api/generate", { prompt, history: conversation }, pending);
-  if (unauthorized) {
+  if (unauthorized && shownAs === prompt) {
     input.value = prompt;
     autoResize();
   }
@@ -839,7 +856,7 @@ form.addEventListener("submit", async (e) => {
   sendBtn.classList.remove("is-loading");
   setBusy(false);
   if (lockScreen.hidden) input.focus();
-});
+}
 
 /* ---------------- assemblies ---------------- */
 

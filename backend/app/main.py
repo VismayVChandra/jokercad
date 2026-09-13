@@ -165,6 +165,10 @@ def _wants_assembly(prompt: str) -> bool:
     return bool(moving) and not one_piece
 
 
+def _wants_organic(prompt: str) -> bool:
+    return bool(re.search(r"\b(organic|sculpt\w*|ergonomic|soften)\b", prompt.lower()))
+
+
 # A top-level variable giving the flange its own size, whether a number or a
 # formula (`flange_diameter = body_diameter + 5 * hole_diameter`). A thickness
 # alone doesn't count: the usual mistake is calling a slice of the body "the flange".
@@ -198,6 +202,14 @@ _FEATURE_CHECKS = [
         "result = Compound(label=..., children=[...]), as in the clamp example.",
         "The design is an assembly on purpose: its moving parts are separate solids joined by pins through "
         "aligned holes. Don't ask to fuse them.",
+    ),
+    (
+        _wants_organic,
+        lambda code: "soften(" in code,
+        "The request asks for an organic look, but the code doesn't round the part. Shape it with curves "
+        "(arcs, splines, lofts) and finish with result = soften(result, fillet_radius).",
+        "The request asks for an organic look: curved, tapered and rounded forms are intended, as long as the "
+        "requested features are all there. Don't flag the rounding.",
     ),
 ]
 
