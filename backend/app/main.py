@@ -52,6 +52,12 @@ MAX_REPAIR_ATTEMPTS = int(os.getenv("MAX_REPAIR_ATTEMPTS", "3"))
 # so a long iterative session doesn't blow past free-tier context limits.
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "16"))
 MAX_PROMPT_LENGTH = 2000
+# Rough cap (at ~4 characters per token) on what one LLM request sends. Groq's
+# free tier allows 8,000 tokens per minute including the reply, and rejects a
+# single request that would exceed it outright.
+INPUT_TOKEN_BUDGET = int(os.getenv("INPUT_TOKEN_BUDGET", "5000"))
+# The end of a traceback is what explains the failure.
+MAX_ERROR_CHARS = 1500
 # base64 adds a third on top of this, and Vercel caps function responses at 4.5 MB.
 MAX_GLB_BYTES = 3_000_000
 
@@ -96,6 +102,28 @@ def _consume_generation_slot() -> None:
         _generation_times.append(now)
 
 
+def _fence(code: str) -> str:
+    return "```python\n" + code + "\n```"
+
+
+def _approx_tokens(*texts: str) -> int:
+    return sum(len(t) for t in texts) // 4
+
+
+def _prepare_history(history: list[dict], prompt: str) -> list[dict]:
+    # Every assistant turn is a complete script, so only the latest one is
+    # needed; older ones are stubbed out to save tokens.
+    latest = max((i for i, m in enumerate(history) if m["role"] == "assistant"), default=-1)
+    history = [
+        m if m["role"] == "user" or i == latest else {"role": "assistant", "content": "(superseded earlier version)"}
+        for i, m in enumerate(history)
+    ]
+    # Drop the oldest exchanges until the request fits, always keeping the latest one.
+    while len(history) > 2 and _approx_tokens(SYSTEM_PROMPT, prompt, *(m["content"] for m in history)) > INPUT_TOKEN_BUDGET:
+        history = history[2:]
+    return history
+
+
 def _model_response(glb_bytes: bytes, code: str, provider_used: str | None, attempts: int) -> GenerateResponse:
     if len(glb_bytes) > MAX_GLB_BYTES:
         return GenerateResponse(
@@ -126,8 +154,9 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
     _consume_generation_slot()
 
-    history = [m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:]
-    messages = history + [{"role": "user", "content": prompt}]
+    history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], prompt)
+    base_messages = history + [{"role": "user", "content": prompt}]
+    messages = base_messages
 
     provider_used = None
     code = None
@@ -138,8 +167,8 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
             try:
                 text, provider_used = router.generate(SYSTEM_PROMPT, messages)
             except RouterExhaustedError as e:
-                logger.warning("attempt=%d router exhausted: %s", attempt, e)
-                return GenerateResponse(ok=False, error=str(e), attempts=attempt)
+                logger.warning("attempt=%d all providers failed: %s", attempt, e)
+                return GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
 
             code = extract_code(text)
             result = run_build123d_code(code)
@@ -155,18 +184,23 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                 )
 
             last_error = result.error
-            logger.info("provider=%s attempt=%d failed: %s", provider_used, attempt, (last_error or "")[:300])
-            messages.append({"role": "assistant", "content": text})
-            messages.append({"role": "user", "content": build_repair_prompt(code, result.error)})
+            logger.info("provider=%s attempt=%d failed: %s", provider_used, attempt, last_error[-300:])
+            # A retry carries only the latest failed attempt, so repair requests
+            # don't grow with every failure.
+            messages = base_messages + [
+                {"role": "assistant", "content": _fence(code)},
+                {"role": "user", "content": build_repair_prompt(last_error[-MAX_ERROR_CHARS:])},
+            ]
     except Exception as e:
         logger.exception("unexpected error")
         return GenerateResponse(ok=False, provider_used=provider_used, code=code, error=f"Unexpected server error: {e}")
 
+    last_line = (last_error or "").strip().splitlines()[-1] if last_error and last_error.strip() else "unknown error"
     return GenerateResponse(
         ok=False,
         provider_used=provider_used,
         code=code,
-        error=f"Gave up after {MAX_REPAIR_ATTEMPTS} attempts. Last error: {last_error}",
+        error=f"Couldn't build a valid part after {MAX_REPAIR_ATTEMPTS} attempts. Last error: {last_line}",
         attempts=MAX_REPAIR_ATTEMPTS,
     )
 

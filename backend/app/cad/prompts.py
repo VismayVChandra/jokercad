@@ -68,6 +68,23 @@ Notes:
     circumradius = across_flats / 2 / cos(pi / side_count) — or simpler,
     circumradius = across_flats / sqrt(3) for a hexagon specifically.
 
+Revolved parts (pulleys, wheels, grooves around a rim, profiled knobs and flanges): draw
+the half cross-section as one closed polygon on Plane.XZ — x is the distance from the
+axis, y is the height — then revolve it 360° around the Z axis:
+    with BuildPart() as bp:
+        with BuildSketch(Plane.XZ):
+            Polygon(*profile_points, align=None)  # align=None keeps the points where you put them
+        revolve(axis=Axis.Z)
+    result = bp.part
+List the points in order around the outline and keep every x > 0 (one side of the axis).
+To cut a groove into a solid you already built, sketch just the groove's cross-section the
+same way and call `revolve(axis=Axis.Z, mode=Mode.SUBTRACT)`.
+
+Operations (extrude, revolve, fillet, chamfer) change the part as soon as you call them
+inside `with BuildPart()`. Choose add or cut with their `mode=` argument; don't store the
+result and add it again — there is no `bp.add(...)` method. Don't pass the sketch builder
+either (`revolve(sk, ...)`): the operation already uses the sketch you just drew.
+
 Fillets and chamfers (apply AFTER the solid exists, by selecting its edges):
     with BuildPart() as bp:
         Box(length, width, height)
@@ -110,16 +127,42 @@ with BuildPart() as bp:
     extrude(amount=-thickness, mode=Mode.SUBTRACT)
 result = bp.part
 ```
+
+Example (V-groove pulley, revolved from its cross-section):
+```python
+outer_diameter = 80.0  # mm
+bore_diameter = 20.0  # mm
+thickness = 15.0  # mm
+groove_depth = 6.0  # mm
+groove_width = 10.0  # mm, measured at the rim
+
+r_out = outer_diameter / 2
+r_in = bore_diameter / 2
+half = thickness / 2
+profile_points = [
+    (r_in, -half),
+    (r_out, -half),
+    (r_out, -groove_width / 2),
+    (r_out - groove_depth, 0),  # the V's vertex
+    (r_out, groove_width / 2),
+    (r_out, half),
+    (r_in, half),
+]
+
+with BuildPart() as bp:
+    with BuildSketch(Plane.XZ):
+        Polygon(*profile_points, align=None)
+    revolve(axis=Axis.Z)
+result = bp.part
+```
 """
 
 
-def build_repair_prompt(previous_code: str, error: str) -> str:
+def build_repair_prompt(error: str) -> str:
     return (
-        "The previous code you gave me failed.\n\n"
-        f"Previous code:\n```python\n{previous_code}\n```\n\n"
+        "That code failed.\n\n"
         f"Error:\n{error}\n\n"
-        "Fix the code and return the corrected full code block. If the error suggests you "
-        "used an API incorrectly, prefer switching to a simpler approach from the cheat-sheet "
-        "(e.g. plain solid primitives with Mode.ADD/SUBTRACT) rather than debugging the same "
-        "complex call again."
+        "Fix it and return the corrected full code block. If the error suggests you used an API "
+        "incorrectly, prefer switching to a simpler approach from the cheat-sheet rather than "
+        "debugging the same complex call again."
     )
