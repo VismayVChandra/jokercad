@@ -13,6 +13,8 @@ Output rules:
   return the corrected full code block. Don't repeat a change that already failed.
 - Never silently drop or simplify a feature the user asked for (teeth, grooves, holes) just \
   to get code that runs. Use the helpers and patterns below for hard features.
+- For a spur gear, always call the built-in `spur_gear(...)` helper described below. Never \
+  draw gear teeth yourself — hand-drawn teeth come out as the wrong shape.
 
 Parameters — the app shows these to the user as editable fields:
 - Start the code with every dimension the user might want to adjust (sizes, diameters,

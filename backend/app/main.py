@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -124,6 +125,28 @@ def _prepare_history(history: list[dict], prompt: str) -> list[dict]:
     return history
 
 
+# The model sometimes ignores the spur_gear() helper and draws teeth itself,
+# which produces the wrong shape, so a spur-gear request is checked in code.
+# Other gear types (and words like "gear-like" or "gear housing") aren't
+# something the helper makes, so they're left alone.
+def _wants_spur_gear(prompt: str) -> bool:
+    text = prompt.lower()
+    asks_for_gear = re.search(r"\bspur\b", text) or (
+        re.search(r"\bgears?\b(?!-)", text) and re.search(r"\b(teeth|tooth|module)\b", text)
+    )
+    other_type = re.search(r"\b(bevel|worm|rack|helical|herringbone|internal|planetary|sprocket)\b", text)
+    return bool(asks_for_gear) and not other_type
+
+
+def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[dict]:
+    # A retry carries only the latest failed attempt, so repair requests don't
+    # grow with every failure.
+    return base_messages + [
+        {"role": "assistant", "content": _fence(code)},
+        {"role": "user", "content": build_repair_prompt(error[-MAX_ERROR_CHARS:])},
+    ]
+
+
 def _model_response(glb_bytes: bytes, code: str, provider_used: str | None, attempts: int) -> GenerateResponse:
     if len(glb_bytes) > MAX_GLB_BYTES:
         return GenerateResponse(
@@ -157,6 +180,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], prompt)
     base_messages = history + [{"role": "user", "content": prompt}]
     messages = base_messages
+    wants_spur_gear = _wants_spur_gear(prompt)
 
     provider_used = None
     code = None
@@ -171,6 +195,13 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                 return GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
 
             code = extract_code(text)
+
+            if wants_spur_gear and "spur_gear(" not in code:
+                last_error = "The gear teeth were drawn by hand. Use the built-in spur_gear() helper for the gear instead."
+                logger.info("provider=%s attempt=%d drew gear teeth instead of calling spur_gear", provider_used, attempt)
+                messages = _repair_messages(base_messages, code, last_error)
+                continue
+
             result = run_build123d_code(code)
 
             if result.ok:
@@ -185,12 +216,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
             last_error = result.error
             logger.info("provider=%s attempt=%d failed: %s", provider_used, attempt, last_error[-300:])
-            # A retry carries only the latest failed attempt, so repair requests
-            # don't grow with every failure.
-            messages = base_messages + [
-                {"role": "assistant", "content": _fence(code)},
-                {"role": "user", "content": build_repair_prompt(last_error[-MAX_ERROR_CHARS:])},
-            ]
+            messages = _repair_messages(base_messages, code, last_error)
     except Exception as e:
         logger.exception("unexpected error")
         return GenerateResponse(ok=False, provider_used=provider_used, code=code, error=f"Unexpected server error: {e}")
