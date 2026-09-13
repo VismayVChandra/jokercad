@@ -1,0 +1,8 @@
+.git
+.claude
+.venv
+venv
+**/__pycache__
+**/*.pyc
+backend/.env
+backend/generated

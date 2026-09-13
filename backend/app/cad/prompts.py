@@ -12,6 +12,14 @@ Output rules:
 - If you are given an error message from a previous attempt, fix that specific error and \
   return the corrected full code block. Don't repeat a change that already failed.
 
+Parameters — the app shows these to the user as editable fields:
+- Start the code with every dimension the user might want to adjust (sizes, diameters,
+  thicknesses, counts, spacings) as a named top-level variable, one per line, assigned a
+  plain number and followed by a short comment with its unit, e.g. `width = 40.0  # mm`.
+- Use descriptive snake_case names (`hole_diameter`, not `d`).
+- Compute anything derived (radii from diameters, offsets, positions) on later lines from
+  those variables, and use only variables — no repeated magic numbers — in the geometry.
+
 Reliability rules — prefer code you are CERTAIN is correct over cleverness:
 - Stick to builder-mode (`with BuildPart() as bp: ...`) unless the user's shape clearly needs
   algebra mode. Builder mode has fewer ways to get the API surface wrong.
@@ -24,26 +32,30 @@ Reliability rules — prefer code you are CERTAIN is correct over cleverness:
 
 build123d cheat-sheet (builder mode):
 
-Solid primitives (used inside `with BuildPart() as bp:`, need a `mode=` to add/cut after
-the first primitive; the first primitive in a part defaults to Mode.ADD):
+Solid primitives are centred on the origin by default. Inside `with BuildPart() as bp:`,
+the first one is added; later ones need `mode=Mode.ADD` or `mode=Mode.SUBTRACT`:
     Box(length, width, height)
     Cylinder(radius, height)
     Sphere(radius)
     Cone(bottom_radius, top_radius, height)
     Torus(major_radius, minor_radius)
 
+A hole goes all the way through a centred solid when the cutting cylinder is also centred
+and at least as tall as the solid. Moving it off-centre with Locations((0, 0, z)) makes it
+a blind hole instead.
+
 Positioning: wrap the primitives you want moved in a `with Locations(...):` block, e.g.
-    with Locations((x, y, z)):
-        Cylinder(radius=4, height=10, mode=Mode.SUBTRACT)
+    with Locations((x_offset, y_offset, 0)):
+        Cylinder(radius=hole_radius, height=height, mode=Mode.SUBTRACT)
 `Locations` takes any number of (x, y, z) tuples and repeats its body at each one — handy
 for bolt-hole patterns.
 
 Sketch + extrude (for prisms with a 2D profile — hexagons, custom outlines, slots):
     with BuildPart() as bp:
-        Box(40, 20, 10)
-        with BuildSketch(Plane.XY.offset(5)) as sk:
+        Box(length, width, height)
+        with BuildSketch(Plane.XY.offset(height / 2)) as sk:
             RegularPolygon(radius=hex_radius, side_count=6)  # radius = circumradius (center to vertex)
-        extrude(amount=-10, mode=Mode.SUBTRACT)
+        extrude(amount=-height, mode=Mode.SUBTRACT)
     result = bp.part
 Notes:
   - `extrude(amount=..., mode=...)` extrudes the most recently built sketch. `amount` is a
@@ -58,22 +70,26 @@ Notes:
 
 Fillets and chamfers (apply AFTER the solid exists, by selecting its edges):
     with BuildPart() as bp:
-        Box(40, 20, 10)
-        fillet(bp.edges(), radius=2)      # rounds every edge
+        Box(length, width, height)
+        fillet(bp.edges(), radius=fillet_radius)      # rounds every edge
         # or select a subset, e.g. only the top face's edges:
-        # fillet(bp.faces().sort_by(Axis.Z)[-1].edges(), radius=2)
+        # fillet(bp.faces().sort_by(Axis.Z)[-1].edges(), radius=fillet_radius)
 
 Booleans between two independently-built parts (rare — prefer Mode.ADD/SUBTRACT above when
 both shapes are simple primitives, since that avoids extra Part objects entirely):
     result = part_a.part + part_b.part   # union
     result = part_a.part - part_b.part   # subtract
 
-Example (box with a hole):
+Example (box with a hole through the centre):
 ```python
+length = 40.0  # mm
+width = 20.0  # mm
+height = 10.0  # mm
+hole_diameter = 4.0  # mm
+
 with BuildPart() as bp:
-    Box(40, 20, 10)
-    with Locations((0, 0, 5)):
-        Cylinder(radius=4, height=10, mode=Mode.SUBTRACT)
+    Box(length, width, height)
+    Cylinder(radius=hole_diameter / 2, height=height, mode=Mode.SUBTRACT)
 result = bp.part
 ```
 
@@ -81,23 +97,20 @@ Example (hex-bore knob, across-flats hex size given by the user):
 ```python
 import math
 
-diameter = 30.0
-thickness = 8.0
-hex_across_flats = 6.0
+diameter = 30.0  # mm
+thickness = 8.0  # mm
+hex_across_flats = 6.0  # mm
+
 hex_radius = hex_across_flats / math.sqrt(3)
 
 with BuildPart() as bp:
     Cylinder(radius=diameter / 2, height=thickness)
-    with BuildSketch(Plane.XY.offset(thickness)) as sk:
+    with BuildSketch(Plane.XY.offset(thickness / 2)) as sk:
         RegularPolygon(radius=hex_radius, side_count=6)
     extrude(amount=-thickness, mode=Mode.SUBTRACT)
 result = bp.part
 ```
 """
-
-
-def build_user_prompt(prompt: str) -> str:
-    return prompt
 
 
 def build_repair_prompt(previous_code: str, error: str) -> str:

@@ -27,9 +27,13 @@
   </header>
 
   <div id="viewerToolbar">
-    <button type="button" id="resetViewBtn" class="tool-btn" title="Reset view">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
-    </button>
+    <div class="view-group" role="group" aria-label="Camera view">
+      <button type="button" class="tool-btn view-btn" data-view="iso" title="Isometric view" disabled>Iso</button>
+      <button type="button" class="tool-btn view-btn" data-view="top" title="Top view" disabled>Top</button>
+      <button type="button" class="tool-btn view-btn" data-view="front" title="Front view" disabled>Front</button>
+      <button type="button" class="tool-btn view-btn" data-view="right" title="Right view" disabled>Right</button>
+    </div>
+    <div class="tool-divider"></div>
     <button type="button" id="wireframeBtn" class="tool-btn" title="Toggle wireframe">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5 12 3l10 5.5-10 5.5L2 8.5Z"/><path d="M2 8.5v7L12 21l10-5.5v-7"/><path d="M12 14v7"/></svg>
     </button>
@@ -49,13 +53,24 @@
     </button>
   </div>
 
+  <div id="viewerStatus" hidden></div>
   <p id="viewerHint">Drag to orbit · Scroll to zoom</p>
 
+  <section id="paramsCard" hidden>
+    <div class="params-header">
+      <span class="params-title">Parameters</span>
+      <span class="params-badge">No AI call</span>
+    </div>
+    <div id="paramsList"></div>
+    <p class="params-hint">Change a value and press Enter — the part rebuilds from the same code.</p>
+  </section>
+
   <aside id="panel">
+    <button type="button" id="panelHandle" class="panel-handle" aria-label="Show or hide the conversation" aria-expanded="true"><span></span></button>
     <div id="chatLog">
       <div id="emptyState">
         <h1>What do you want to build?</h1>
-        <p>Describe a part in plain English — shape, dimensions, holes.</p>
+        <p>Describe a part in plain English — shape, dimensions, holes. Then fine-tune every dimension by hand.</p>
         <div class="chips">
           <button type="button" class="chip">a 40×20×10mm box with a 4mm hole through the center</button>
           <button type="button" class="chip">a 30mm diameter, 8mm thick knob with a 6mm hexagonal hole through the center</button>
@@ -72,7 +87,7 @@
           <svg class="icon-spinner" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="42 100"/></svg>
         </button>
       </div>
-      <div class="input-hint">⌘/Ctrl + Enter to generate</div>
+      <div class="input-hint">⌘/Ctrl + Enter to generate · click a ✓ to restore that version</div>
     </form>
   </aside>
 
@@ -87,6 +102,17 @@
       </div>
     </div>
     <pre id="codeView"></pre>
+  </div>
+
+  <div id="lockScreen" hidden>
+    <form id="lockForm" class="lock-card">
+      <span class="brand-mark">◆</span>
+      <h2>This workspace is private</h2>
+      <p>Enter the access password to start building.</p>
+      <input id="lockInput" type="password" autocomplete="current-password" placeholder="Password" />
+      <p id="lockError" class="lock-error" hidden></p>
+      <button type="submit" id="lockBtn">Unlock</button>
+    </form>
   </div>
 
   <script type="importmap">

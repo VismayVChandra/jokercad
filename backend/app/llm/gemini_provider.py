@@ -1,39 +1,50 @@
 import os
 
+import requests
+
 from .base import LLMProvider, ProviderError
+
+_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
 class GeminiProvider(LLMProvider):
+    """Calls the Gemini REST API directly; the google-generativeai SDK and its
+    dependencies would add ~130 MB to the deploy bundle."""
+
     name = "gemini"
 
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "")
-        self.model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.timeout = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
     def generate(self, system_prompt: str, messages: list[dict]) -> str:
+        body = {
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [
+                {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+                for m in messages
+            ],
+            "generationConfig": {"temperature": 0.2},
+        }
         try:
-            import google.generativeai as genai
-        except ImportError as e:
-            raise ProviderError(f"google-generativeai package not installed: {e}")
-
-        try:
-            genai.configure(api_key=self.api_key)
-            model = genai.GenerativeModel(self.model, system_instruction=system_prompt)
-
-            # Gemini wants "model" not "assistant" as the role name.
-            history = [
-                {"role": "model" if m["role"] == "assistant" else "user", "parts": [m["content"]]}
-                for m in messages[:-1]
-            ]
-            chat = model.start_chat(history=history)
-            resp = chat.send_message(
-                messages[-1]["content"],
-                request_options={"timeout": self.timeout},
+            resp = requests.post(
+                _API_URL.format(model=self.model),
+                json=body,
+                headers={"x-goog-api-key": self.api_key},
+                timeout=self.timeout,
             )
-            return resp.text
-        except Exception as e:
-            raise ProviderError(f"Gemini call failed: {e}")
+        except requests.RequestException as e:
+            raise ProviderError(f"Gemini request failed: {e}")
+
+        if resp.status_code != 200:
+            raise ProviderError(f"Gemini returned {resp.status_code}: {resp.text[:300]}")
+
+        try:
+            parts = resp.json()["candidates"][0]["content"]["parts"]
+            return "".join(p.get("text", "") for p in parts)
+        except (KeyError, IndexError, ValueError) as e:
+            raise ProviderError(f"Unexpected Gemini response shape: {e}")

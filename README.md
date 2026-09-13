@@ -1,66 +1,92 @@
 # jokercad
 
-Prompt-to-CAD: describe a part in plain English, get back a real parametric
-solid you can view and export (STL/GLB), generated via `build123d` (built on
+Prompt-to-CAD: describe a part in plain English, get back a real solid you
+can view and export (STL/GLB), generated with `build123d` (built on
 OpenCascade).
 
 The LLM never touches geometry directly — it writes `build123d` Python code,
-which gets executed in a subprocess and exported. If execution fails, the
-error is fed back to the model for up to 3 self-repair attempts.
+which runs in a subprocess and gets exported. If the code fails or produces
+invalid geometry, the error is fed back to the model for up to 3 self-repair
+attempts.
 
 ## Free by design
-
-No API costs required to run this yourself:
 
 - **Geometry**: `build123d` (OpenCascade) — open source.
 - **LLM**: a provider router tries **Groq** (free tier) → **Gemini** (free
   tier) → **Ollama** (local, no key) in order, falling through automatically
-  if one is unconfigured or rate-limited. You only need to set up *one* of
-  the three to get started.
+  if one is unconfigured, rate-limited, or down. You only need one of them.
 - **Frontend**: Three.js via CDN, no build step.
+- **Hosting**: runs on Vercel's free Hobby plan (see below).
 
-## Setup
+## Run locally
 
-1. Install backend dependencies (Python 3.11+ recommended):
+1. From the repo root, install dependencies (Python 3.11+):
 
    ```bash
-   cd backend
    python -m venv .venv
    .venv\Scripts\activate
    pip install -r requirements.txt
    ```
 
-2. Copy `.env.example` to `.env` and fill in at least one provider:
-
-   ```bash
-   copy .env.example .env
-   ```
-
-   - **Groq** (recommended first): free key at https://console.groq.com/keys
+2. Copy `backend/.env.example` to `backend/.env` and fill in at least one provider:
+   - **Groq**: free key at https://console.groq.com/keys
    - **Gemini**: free key at https://aistudio.google.com/app/apikey
    - **Ollama**: install from https://ollama.com, then `ollama pull qwen2.5-coder:7b`
-     — no key needed, works offline.
 
-3. Run the server:
+3. From the repo root, start the server:
 
    ```bash
-   uvicorn app.main:app --reload --port 8000
+   uvicorn app.main:app --app-dir backend --port 8000
    ```
 
-4. Open http://localhost:8000 and type a prompt, e.g.:
-   > a 40x20x10mm box with a 4mm hole drilled through the center
+4. Open http://localhost:8000.
 
-Check `/api/health` to see which providers are currently configured.
+The first generation on a fresh Windows machine can take a minute or more
+while antivirus scans OpenCascade's native libraries; later ones take seconds.
+If Windows **Smart App Control** is on, it may block those unsigned libraries
+entirely ("An Application Control policy has blocked this file"); run the
+backend on Linux instead (WSL, Docker, or a deployment).
 
-## Notes / current limitations
+## Deploy to Vercel (free Hobby plan)
 
-- **Not a sandboxed multi-tenant service.** Generated code runs as a local
-  subprocess with a basic denylist on dangerous tokens — fine for you running
-  it against your own prompts, not safe to expose to untrusted users on the
-  open internet without a real sandbox (Docker/gVisor/firejail).
-- **Session state is in-memory** and resets when the server restarts.
-- Each prompt currently regenerates code from the full conversation history
-  rather than surgically patching a persistent feature tree — good enough for
-  iterating by conversation, but large multi-step models will get slower and
-  less reliable to edit this way. A persistent, structured feature tree is
-  the natural next step.
+The bundle is about 720 MB — over the standard 500 MB limit for Python
+functions — so it relies on Vercel's Large Functions beta (up to 5 GB).
+
+1. Import the GitHub repo as a Vercel project. Framework preset: **FastAPI**.
+   Root Directory: the repo root (`./`). Vercel loads the app from `index.py`.
+2. In **Settings → Environment Variables** (Production and Preview), add:
+   - `VERCEL_SUPPORT_LARGE_FUNCTIONS` = `1`
+   - `GROQ_API_KEY` (and/or `GEMINI_API_KEY`)
+   - `APP_PASSWORD` — a long random password. Without it, the deployment
+     refuses to generate.
+   - optionally `LLM_PROVIDER_ORDER=groq,gemini`, since Ollama isn't available there
+3. Redeploy.
+
+The server keeps no state between requests: the browser sends the conversation
+with each prompt, and the finished model comes back in the response.
+
+## Other hosts (Docker)
+
+The `Dockerfile` runs anywhere that runs containers (Google Cloud Run, Render,
+a VPS). It listens on `$PORT` (default 8000). Set the same environment
+variables as for Vercel.
+
+## Security
+
+Generated code runs in a subprocess on the server. API keys and other
+secret-looking variables are removed from its environment, and a basic filter
+blocks obvious dangerous calls — but both are easy to get around, so treat
+anyone who can generate as someone who can run code on the server and use your
+LLM quota.
+
+- Set `APP_PASSWORD` on any publicly reachable deployment. Generation then
+  requires the password; the page itself stays viewable. Use a long random
+  value — nothing slows down password guessing.
+- `GENERATIONS_PER_HOUR` (default 60) caps generations.
+
+## Current limitations
+
+- The hourly generation cap is kept in memory, so on serverless hosts it
+  applies per running instance rather than globally.
+- Each prompt regenerates code from the conversation rather than patching a
+  persistent feature tree.
