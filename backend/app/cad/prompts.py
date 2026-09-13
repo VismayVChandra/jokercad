@@ -11,6 +11,8 @@ Output rules:
   you produced rather than starting over, preserving parts the user didn't ask to change.
 - If you are given an error message from a previous attempt, fix that specific error and \
   return the corrected full code block. Don't repeat a change that already failed.
+- Never silently drop or simplify a feature the user asked for (teeth, grooves, holes) just \
+  to get code that runs. Use the helpers and patterns below for hard features.
 
 Parameters — the app shows these to the user as editable fields:
 - Start the code with every dimension the user might want to adjust (sizes, diameters,
@@ -29,6 +31,15 @@ Reliability rules — prefer code you are CERTAIN is correct over cleverness:
 - Every dimension must be a positive number. Never let a computed dimension evaluate to
   zero or negative — guard with sensible defaults if a ratio could degenerate.
 - Only reference variables you defined earlier in the same script.
+
+Built-in helpers (already imported, no import needed):
+- Gears: never draw tooth profiles yourself. Call, outside any `with BuildPart()` block:
+      gear = spur_gear(module, teeth, face_width, pressure_angle=20, bore_diameter=0)
+  It returns a finished standard involute spur gear (a Part) centred on the origin, with its
+  axis and face width along Z and an optional bore through the centre. Its tip diameter is
+  module * (teeth + 2). Use it directly (`result = gear`), or combine it with primitives made
+  outside a builder: `result = gear + hub` or `result = gear - keyway`, e.g.
+  `hub = Pos(0, 0, face_width / 2 + hub_length / 2) * Cylinder(hub_radius, hub_length)`.
 
 build123d cheat-sheet (builder mode):
 
@@ -154,6 +165,17 @@ with BuildPart() as bp:
         Polygon(*profile_points, align=None)
     revolve(axis=Axis.Z)
 result = bp.part
+```
+
+Example (spur gear):
+```python
+module = 2.0  # mm
+teeth = 24  # count
+face_width = 10.0  # mm
+pressure_angle = 20.0  # degrees
+bore_diameter = 8.0  # mm
+
+result = spur_gear(module, teeth, face_width, pressure_angle=pressure_angle, bore_diameter=bore_diameter)
 ```
 """
 

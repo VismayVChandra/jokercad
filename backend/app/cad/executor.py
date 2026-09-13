@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,10 @@ EXECUTION_TIMEOUT_SECONDS = 120
 # broken environment isn't mistaken for a bug the LLM could fix.
 _ENGINE_UNAVAILABLE_EXIT = 97
 
+# Copied next to each generated script as `jokercad_parts`, so its helpers
+# (e.g. spur_gear) are available to generated code.
+_PARTS_LIBRARY = Path(__file__).with_name("parts_library.py")
+
 _CODE_FENCE_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
 
 _FORBIDDEN_TOKENS = ("import os", "import sys", "subprocess", "__import__", "open(", "eval(", "exec(", "socket")
@@ -23,6 +28,7 @@ _SECRET_ENV_NAME = re.compile(r"KEY|SECRET|TOKEN|PASSWORD", re.IGNORECASE)
 _RUNNER_TEMPLATE = """\
 try:
     from build123d import *
+    from jokercad_parts import *
 except Exception as _engine_error:
     import sys as _sys
     print(f"{{type(_engine_error).__name__}}: {{_engine_error}}", file=_sys.stderr)
@@ -97,6 +103,7 @@ def run_build123d_code(code: str) -> ExecutionResult:
     with tempfile.TemporaryDirectory(prefix="jokercad-") as work_dir:
         glb_path = Path(work_dir) / "part.glb"
         script_path = Path(work_dir) / "run.py"
+        shutil.copyfile(_PARTS_LIBRARY, Path(work_dir) / "jokercad_parts.py")
         script_path.write_text(
             _RUNNER_TEMPLATE.format(user_code=code, glb_path=glb_path, engine_exit=_ENGINE_UNAVAILABLE_EXIT),
             encoding="utf-8",
