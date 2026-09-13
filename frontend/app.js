@@ -7,6 +7,7 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import { bodyLabels, makeRig, moveTo } from "./motion.js";
 import { analyzePrint, bestOrientation, make3mf } from "./print.js";
+import { buildDrawing } from "./drawing.js";
 
 const API_BASE = "";
 // Matches the server's MAX_HISTORY_MESSAGES; it would drop older turns anyway.
@@ -106,6 +107,14 @@ const printEstimate = document.getElementById("printEstimate");
 const orientBtn = document.getElementById("orientBtn");
 const orientResetBtn = document.getElementById("orientResetBtn");
 const export3mfBtn = document.getElementById("export3mfBtn");
+const fitSelect = document.getElementById("fitSelect");
+const drawingModal = document.getElementById("drawingModal");
+const drawingPreview = document.getElementById("drawingPreview");
+const drawingProjection = document.getElementById("drawingProjection");
+const drawingSheet = document.getElementById("drawingSheet");
+const drawingSvgBtn = document.getElementById("drawingSvgBtn");
+const drawingPdfBtn = document.getElementById("drawingPdfBtn");
+const drawingCloseBtn = document.getElementById("drawingCloseBtn");
 
 const narrowScreen = window.matchMedia("(max-width: 900px)");
 
@@ -876,7 +885,7 @@ async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
   setBusy(true, "Building part…");
   const pending = addThinkingEntry("Generating…");
 
-  const payload = { prompt, history: conversation, ...(picture ? { image: picture.base64 } : {}) };
+  const payload = { prompt, history: conversation, fit: fitSelect.value, ...(picture ? { image: picture.base64 } : {}) };
   const { data, unauthorized } = await callApi("/api/generate", payload, pending);
   if (unauthorized && shownAs === prompt) {
     input.value = prompt;
@@ -1219,6 +1228,7 @@ function exportPng() {
 
 const EXPORTERS = {
   step: exportStep,
+  drawing: openDrawing,
   stl: () => {
     const stl = new STLExporter().parse(exportRoot(), { binary: true });
     downloadBlob(new Blob([stl], { type: "model/stl" }), `${exportName()}.stl`);
@@ -1458,7 +1468,7 @@ const pickMaterial = new THREE.MeshBasicMaterial({
 // Quick changes offered for each kind of picked feature.
 const EDIT_CHIPS = {
   flat: ["Make it 2 mm thicker", "Round its edges", "Add a hole in the middle", "Remove it"],
-  hole: ["Make it 2 mm wider", "Countersink it for a screw", "Chamfer its edge", "Fill it in"],
+  hole: ["Make it 2 mm wider", "Give it a sliding fit", "Countersink it for a screw", "Fill it in"],
   round: ["Make it 5 mm taller", "Make it 2 mm wider", "Round its top edge", "Remove it"],
   curved: ["Make it smoother", "Make it flatter", "Remove it"],
 };
@@ -1990,6 +2000,111 @@ printCloseBtn.addEventListener("click", () => setPrintMode(false));
 orientBtn.addEventListener("click", autoOrient);
 orientResetBtn.addEventListener("click", orientAsDesigned);
 export3mfBtn.addEventListener("click", export3mf);
+
+/* ---------------- fit ---------------- */
+
+const FIT_KEY = "jokercad-fit";
+try {
+  const saved = localStorage.getItem(FIT_KEY);
+  if (saved && [...fitSelect.options].some((o) => o.value === saved)) fitSelect.value = saved;
+  else fitSelect.value = "print:sliding";
+} catch {
+  fitSelect.value = "print:sliding";
+}
+fitSelect.addEventListener("change", () => {
+  try {
+    localStorage.setItem(FIT_KEY, fitSelect.value);
+  } catch {}
+});
+
+/* ---------------- engineering drawing ---------------- */
+
+const DRAWING_KEY = "jokercad-drawing";
+const drawingSettings = (() => {
+  const region = ((navigator.language || "").split("-")[1] || "").toUpperCase();
+  const defaults = { projection: region === "US" ? "third" : "first", sheet: "A4" };
+  try {
+    return { ...defaults, ...JSON.parse(localStorage.getItem(DRAWING_KEY) || "{}") };
+  } catch {
+    return defaults;
+  }
+})();
+drawingProjection.value = drawingSettings.projection;
+drawingSheet.value = drawingSettings.sheet;
+let drawingSvg = "";
+
+function openDrawing() {
+  if (!exportSource) return;
+  drawingModal.hidden = false;
+  renderDrawing();
+}
+
+function renderDrawing() {
+  drawingSvg = "";
+  drawingPreview.innerHTML = '<p class="drawing-wait">Drawing the views…</p>';
+  // Lets the message show before the work, which can take a second or two.
+  setTimeout(() => {
+    try {
+      const params = assembly.on
+        ? []
+        : extractParams(currentCode).map((p) => ({ name: humanize(p.name), value: p.value, unit: unitFor(p.hint) }));
+      drawingSvg = buildDrawing(exportRoot(), {
+        renderer,
+        title: assembly.on ? `${project.name} assembly` : activePart.name,
+        project: project.name,
+        material: (MATERIALS[printSettings.material] || MATERIALS[0]).name,
+        params,
+        projection: drawingSettings.projection,
+        sheet: drawingSettings.sheet,
+      }).svg;
+      drawingPreview.innerHTML = drawingSvg;
+    } catch (err) {
+      drawingPreview.innerHTML = "";
+      const message = document.createElement("p");
+      message.className = "drawing-wait";
+      message.textContent = `Couldn't draw this part: ${err.message}`;
+      drawingPreview.append(message);
+    }
+  }, 40);
+}
+
+for (const control of [drawingProjection, drawingSheet]) {
+  control.addEventListener("change", () => {
+    drawingSettings.projection = drawingProjection.value;
+    drawingSettings.sheet = drawingSheet.value;
+    try {
+      localStorage.setItem(DRAWING_KEY, JSON.stringify(drawingSettings));
+    } catch {}
+    renderDrawing();
+  });
+}
+
+drawingSvgBtn.addEventListener("click", () => {
+  if (drawingSvg) downloadBlob(new Blob([drawingSvg], { type: "image/svg+xml" }), `${exportName()}-drawing.svg`);
+});
+
+// Prints the sheet at its real size, so "Save as PDF" in the print dialog
+// gives a PDF that's true to scale.
+drawingPdfBtn.addEventListener("click", () => {
+  if (!drawingSvg) return;
+  const [width, height] = drawingSettings.sheet === "A3" ? [420, 297] : [297, 210];
+  const frame = document.createElement("iframe");
+  frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  frame.srcdoc =
+    `<!doctype html><html><head><title>${exportName()}-drawing</title><style>@page{size:${width}mm ${height}mm;margin:0}` +
+    `html,body{margin:0}svg{display:block;width:${width}mm;height:${height}mm}</style></head><body>${drawingSvg}</body></html>`;
+  frame.addEventListener("load", () => {
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 60000);
+  });
+  document.body.appendChild(frame);
+});
+
+drawingCloseBtn.addEventListener("click", () => (drawingModal.hidden = true));
+drawingModal.addEventListener("click", (e) => {
+  if (e.target === drawingModal) drawingModal.hidden = true;
+});
 
 /* ---------------- motion ---------------- */
 
@@ -3007,7 +3122,8 @@ const VIEW_KEYS = { 1: "iso", 2: "top", 3: "front", 4: "right" };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     // Closes the most recently opened thing first.
-    if (!editPopup.hidden) closeEditPopup();
+    if (!drawingModal.hidden) drawingModal.hidden = true;
+    else if (!editPopup.hidden) closeEditPopup();
     else if (!exportMenu.hidden) setExportMenu(false);
     else if (!projectMenu.hidden) setProjectMenu(false);
     else if (codeDrawer.classList.contains("is-open")) setCodeDrawer(false);

@@ -32,6 +32,19 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   filament, cost and time, **Auto-orient** to the side that prints best, and
   **Export 3MF** for Bambu Studio, PrusaSlicer, Orca or Cura
   (`frontend/print.js`).
+- **Engineering drawing** (Export → PDF): front, top and side views with
+  hidden lines dashed, overall sizes, centre marks and a hole table (position,
+  Ø, through or depth), the part's parameters, an isometric view and a title
+  block, in first-angle (ISO) or third-angle projection, on A4 or A3. It's SVG
+  in millimetres, so printing (or "Save as PDF") is true to scale
+  (`frontend/drawing.js`: edges from the mesh, hidden lines from depth maps).
+- **Standard parts**: exact ISO sizes for M2–M20 bolts, nuts, washers,
+  clearance and tap holes, counterbores, heat-set insert holes, nut traps and
+  common ball bearings, plus coil springs, as helpers the model calls
+  (`backend/app/cad/parts_library.py`).
+- **Fit** (under the chat box): press, sliding or loose, for printed or
+  machined parts. Every prompt tells the model the clearance to use between
+  holes and what goes in them, kept as an editable `clearance` parameter.
 - **Organic** (✨ in the toolbar): the AI reshapes the current part with
   smooth, sculpted curves (splines, lofts, tapers) and rounds every edge with
   the built-in `soften()` helper, keeping holes, bores and main sizes. It's a

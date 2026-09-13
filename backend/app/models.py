@@ -15,6 +15,8 @@ class GenerateRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list, max_length=50)
     # A reference photo or sketch, base64-encoded (the browser shrinks it first).
     image: str | None = Field(default=None, max_length=5_000_000)
+    # How mating parts should fit, as "process:kind", e.g. "print:sliding".
+    fit: str | None = Field(default=None, max_length=32)
 
 
 class RunRequest(BaseModel):

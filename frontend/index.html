@@ -89,6 +89,9 @@
     <button type="button" class="menu-item" role="menuitem" data-format="glb">
       <span class="menu-format">GLB</span><span class="menu-desc">Web, Blender and 3D apps</span>
     </button>
+    <button type="button" class="menu-item" role="menuitem" data-format="drawing">
+      <span class="menu-format">PDF</span><span class="menu-desc">Engineering drawing: views, sizes, holes</span>
+    </button>
     <button type="button" class="menu-item" role="menuitem" data-format="png">
       <span class="menu-format">PNG</span><span class="menu-desc">Image of the current view</span>
     </button>
@@ -242,7 +245,20 @@
           <svg class="icon-spinner" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="42 100"/></svg>
         </button>
       </div>
-      <div class="input-hint">⌘/Ctrl + Enter to generate · click a ✓ to restore that version</div>
+      <div class="composer-footer">
+        <label class="fit-picker" title="How parts that go together should fit: holes for pins, shafts, bearings and bolts">
+          Fit
+          <select id="fitSelect">
+            <option value="print:press">Printed, press (+0.1 mm)</option>
+            <option value="print:sliding">Printed, sliding (+0.3 mm)</option>
+            <option value="print:loose">Printed, loose (+0.6 mm)</option>
+            <option value="machined:press">Machined, press (H7/p6)</option>
+            <option value="machined:sliding">Machined, sliding (H7/g6)</option>
+            <option value="machined:loose">Machined, loose (H11/c11)</option>
+          </select>
+        </label>
+        <span class="input-hint">⌘/Ctrl + Enter to generate</span>
+      </div>
     </form>
 
     <div id="assemblyPanel" hidden>
@@ -296,6 +312,30 @@
       </div>
     </div>
     <pre id="codeView"></pre>
+  </div>
+
+  <div id="drawingModal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <span class="params-title">Engineering drawing</span>
+        <div class="modal-actions">
+          <select id="drawingProjection" aria-label="Projection">
+            <option value="first">First angle (ISO, India)</option>
+            <option value="third">Third angle (US)</option>
+          </select>
+          <select id="drawingSheet" aria-label="Sheet size">
+            <option value="A4">A4</option>
+            <option value="A3">A3</option>
+          </select>
+          <button type="button" id="drawingSvgBtn" class="text-btn">Download SVG</button>
+          <button type="button" id="drawingPdfBtn" class="primary-btn" title="Print it, or choose Save as PDF">Print / Save PDF</button>
+          <button type="button" id="drawingCloseBtn" class="icon-btn" title="Close (Esc)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="drawingPreview" class="drawing-preview"></div>
+    </div>
   </div>
 
   <div id="lockScreen" hidden>

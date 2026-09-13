@@ -68,6 +68,29 @@ MAX_GLB_BYTES = 3_000_000
 MAX_STEP_BYTES = 4_000_000
 # A reference picture sent with a prompt; the browser shrinks photos well below this.
 MAX_IMAGE_BYTES = 3_000_000
+# The fit chosen in the app, told to the model with each prompt: (description, clearance mm).
+FITS = {
+    "print:press": ("a press fit for 3D printing", 0.1),
+    "print:sliding": ("a sliding fit for 3D printing", 0.3),
+    "print:loose": ("a loose fit for 3D printing", 0.6),
+    "machined:press": ("a machined press fit (about H7/p6)", -0.02),
+    "machined:sliding": ("a machined sliding fit (about H7/g6)", 0.03),
+    "machined:loose": ("a machined loose fit (about H11/c11)", 0.15),
+}
+
+
+def _fit_note(fit: str | None) -> str:
+    if fit not in FITS:
+        return ""
+    description, clearance = FITS[fit]
+    process, kind = fit.split(":")
+    size = f"{abs(clearance):g} mm {'wider' if clearance >= 0 else 'narrower'}"
+    return (
+        f"\n\n(Fit setting: {description}. Where parts go together, like a pin or shaft in a hole, make the "
+        f'hole {size} than what goes in it: fit_clearance("{kind}", "{process}"), kept in a `clearance` parameter.)'
+    )
+
+
 PICTURE_NOTE = (
     "A reference photo or sketch is attached. Build the object it shows as a part: use any dimensions "
     "written on it, and size the rest in proportion to a given dimension, or at a sensible real-world size "
@@ -330,7 +353,8 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
     request_text = prompt or "Build the object in the picture."
     history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], request_text)
-    base_messages = history + [{"role": "user", "content": f"{PICTURE_NOTE}\n\n{request_text}" if image else request_text}]
+    asked = f"{PICTURE_NOTE}\n\n{request_text}" if image else request_text
+    base_messages = history + [{"role": "user", "content": asked + _fit_note(req.fit)}]
     messages = base_messages
     images = [image] if image else None
     required_features = [(has, message) for wants, has, message, _ in _FEATURE_CHECKS if wants(request_text)]

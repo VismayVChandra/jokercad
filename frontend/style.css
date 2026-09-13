@@ -761,6 +761,128 @@ button {
   color: var(--text-faint);
 }
 
+/* ---------- fit picker ---------- */
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.composer-footer .input-hint {
+  margin-top: 0;
+}
+
+.fit-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.fit-picker select {
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  outline: none;
+}
+
+.fit-picker select option {
+  background: var(--surface-solid);
+}
+
+/* ---------- drawing ---------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 6, 10, 0.7);
+  backdrop-filter: blur(6px);
+  animation: fade-in 0.2s var(--ease);
+}
+
+.modal-card {
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  max-height: 100%;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.modal-actions select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.modal-actions select option {
+  background: var(--surface-solid);
+}
+
+.modal-actions .primary-btn {
+  padding: 6px 13px;
+}
+
+.drawing-preview {
+  flex: 1;
+  min-height: 0;
+  padding: 18px;
+  overflow: auto;
+  background: #2a2e3b;
+}
+
+.drawing-preview svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.drawing-wait {
+  margin: 40px 0;
+  color: var(--text-dim);
+  text-align: center;
+}
+
 /* ---------- pictures ---------- */
 
 .input-row {

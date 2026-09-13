@@ -49,6 +49,22 @@ Built-in helpers (already imported, no import needed):
   outside a builder: `result = gear + hub` or `result = gear - keyway`, e.g.
   `hub = Pos(0, 0, face_width / 2 + hub_length / 2) * Cylinder(hub_radius, hub_length)`.
 
+Standard parts (built in; metric sizes "M2" to "M20", bearing codes like "608" or "6201"). Use
+them whenever the user names a bolt, screw, nut, washer, insert or bearing, so sizes are exact:
+- Hole sizes, in mm: clearance_hole("M4") for a bolt to pass through, tap_hole("M4") to thread or
+  self-tap into, counterbore("M4") -> (diameter, depth) to sink a socket head, insert_hole("M3")
+  -> (diameter, depth) for a heat-set insert, nut_trap("M3") -> (across_flats, depth) for a hex
+  nut pocket (cut it with RegularPolygon(across_flats / 2, 6, major_radius=False)),
+  bearing_size("608") -> (bore, outer_diameter, width), fastener("M4") -> a dict of every size.
+- Parts, placed with Pos(...) like any other: socket_head_bolt("M4", 20) and hex_bolt("M6", 30)
+  (head on z = 0 going up, shank down to -length), hex_nut("M4"), washer("M4"),
+  ball_bearing("608") (each lying on z = 0), compression_spring(outer_diameter, wire_diameter,
+  free_length, coils). Threads show as plain shanks, as on drawings.
+- Fits: a hole that takes a pin, shaft, bearing or another part is wider than it by
+  fit_clearance(kind, process), kind "press", "sliding" or "loose", process "print" or
+  "machined". Use the fit the user's note asks for, and keep it in a plain-number `clearance`
+  parameter, e.g. `clearance = 0.3  # mm, sliding fit`.
+
 Engineering terms — build what the words mean:
 - A flange is a separate, thinner plate at one end of a body that sticks out wider than the
   body — even when the user only gives the body's sizes. Mounting or bolt holes go through
@@ -75,8 +91,8 @@ relative to each other) — see the clamp example at the end:
 - Make the mirror-image part by mirroring before moving it:
   `right_arm = Pos(*right_pivot, arm_z) * mirror(arm.part, about=Plane.YZ)`.
   Plane.YZ swaps left and right (x); Plane.XZ would flip front and back (y) instead.
-- Printed parts that move need clearance: holes 0.4 mm wider than their pin, and a 0.4 mm
-  gap between stacked moving parts. Parts must not overlap each other.
+- Parts that move need clearance: holes wider than their pin by the fit's clearance (see
+  Fits), and a 0.4 mm gap between stacked moving parts. Parts must not overlap each other.
 - Give every part a short unique label, then return them together:
   `result = Compound(label="gripper", children=[base_part, left_arm, right_arm, *pins])`.
 - Say how it moves in a `motion` dict (see the clamp example); the viewer uses it to animate
@@ -275,7 +291,7 @@ pin_diameter = 6.0  # mm
 arm_length = 55.0  # mm
 arm_width = 12.0  # mm
 arm_thickness = 5.0  # mm
-clearance = 0.4  # mm, lets printed parts move
+clearance = 0.3  # mm, sliding fit: fit_clearance("sliding")
 
 hole_diameter = pin_diameter + clearance
 arm_z = base_thickness + clearance  # arms sit just above the base without touching it
