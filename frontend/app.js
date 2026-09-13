@@ -5,6 +5,7 @@ import { STLExporter } from "three/addons/exporters/STLExporter.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+import { bodyLabels, makeRig, moveTo } from "./motion.js";
 
 const API_BASE = "";
 // Matches the server's MAX_HISTORY_MESSAGES; it would drop older turns anyway.
@@ -74,6 +75,12 @@ const asmFields = [...asmSelection.querySelectorAll("input[data-axis]")];
 const asmModeButtons = [...asmSelection.querySelectorAll("[data-mode]")];
 const mateBtn = document.getElementById("mateBtn");
 const undoMoveBtn = document.getElementById("undoMoveBtn");
+const motionCard = document.getElementById("motionCard");
+const motionSlider = document.getElementById("motionSlider");
+const motionValue = document.getElementById("motionValue");
+const motionHint = document.getElementById("motionHint");
+const motionPlayBtn = document.getElementById("motionPlayBtn");
+const motionResetBtn = document.getElementById("motionResetBtn");
 
 const narrowScreen = window.matchMedia("(max-width: 900px)");
 
@@ -370,7 +377,7 @@ function refreshHelpers() {
   if (!busy) showViewerStatus(idleStatusText());
 }
 
-function showModel(gltf, reframe, parts) {
+function showModel(gltf, reframe, parts, motionSpec) {
   // Untouched copy for export and measuring, taken before the viewer rescales and moves it.
   const source = gltf.scene.clone();
   const model = gltf.scene;
@@ -380,11 +387,13 @@ function showModel(gltf, reframe, parts) {
   model.scale.setScalar(1000);
   colorParts(model, parts);
   setCurrentObject(model, { reframe, source });
+  setupMotion(model, parts, motionSpec);
 }
 
 // An empty viewer, for a part that hasn't been built yet.
 function clearViewer() {
   displayToken++;
+  resetMotion();
   setSection(false);
   setMeasuring(false);
   removeCurrentObject();
@@ -397,12 +406,12 @@ function clearViewer() {
   codeView.textContent = "";
 }
 
-function loadModel(glbBytes, reframe, parts) {
+function loadModel(glbBytes, reframe, parts, motionSpec) {
   const token = ++displayToken;
   loader.parse(
     glbBytes.slice().buffer,
     "",
-    (gltf) => token === displayToken && showModel(gltf, reframe, parts),
+    (gltf) => token === displayToken && showModel(gltf, reframe, parts, motionSpec),
     (err) => {
       const el = document.createElement("div");
       chatLog.appendChild(el);
@@ -495,8 +504,8 @@ let busy = false;
 
 const fence = (code) => "```python\n" + code + "\n```";
 
-function addVersion(entryEl, code, glbBytes, reframe, parts) {
-  versions.push({ code, glbBytes, parts, conversation: conversation.slice() });
+function addVersion(entryEl, code, glbBytes, reframe, parts, motionSpec) {
+  versions.push({ code, glbBytes, parts, motion: motionSpec, conversation: conversation.slice() });
   const index = versions.length - 1;
   decorateVersionEntry(entryEl, index);
   showVersion(index, reframe);
@@ -506,7 +515,7 @@ function addVersion(entryEl, code, glbBytes, reframe, parts) {
 // Records a successful build, shown on its chat entry, as a new version of the active part.
 function commitVersion(entryEl, text, data, reframe) {
   setEntrySuccess(entryEl, text);
-  const index = addVersion(entryEl, data.code, base64ToBytes(data.glb_base64), reframe, data.parts);
+  const index = addVersion(entryEl, data.code, base64ToBytes(data.glb_base64), reframe, data.parts, data.motion);
   recordLog({ kind: "version", text, version: index });
 }
 
@@ -547,7 +556,7 @@ function showVersion(index, reframe) {
   codeView.textContent = version.code;
   modelTools.forEach((btn) => (btn.disabled = false));
   renderParams(version.code);
-  loadModel(version.glbBytes, reframe, version.parts);
+  loadModel(version.glbBytes, reframe, version.parts, version.motion);
   if (narrowScreen.matches) setPanelCollapsed(true);
 }
 
@@ -1307,6 +1316,132 @@ async function offerSharedPart() {
   });
 }
 
+/* ---------------- motion ---------------- */
+
+// The model's own frame (build123d: mm, Z up) expressed in the glTF scene's
+// (metres, Y up), the same mapping exportRoot() undoes.
+const MODEL_TO_GLTF = new THREE.Matrix4()
+  .set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)
+  .multiply(new THREE.Matrix4().makeScale(0.001, 0.001, 0.001));
+const MOTION_HINT = "Drag to move the mechanism; every link follows its pins.";
+const motion = { rig: null, bodies: [], toWorld: null, fromWorld: null, playing: false, frame: 0 };
+
+function resetMotion() {
+  stopMotion(false);
+  motion.rig = null;
+  motionCard.hidden = true;
+}
+
+// spec: the `motion` dict from the part's code, as the server passed it on.
+function setupMotion(model, parts, spec) {
+  resetMotion();
+  const rig = makeRig(spec, parts);
+  if (!rig) return;
+  model.updateMatrixWorld(true);
+  motion.toWorld = model.matrixWorld.clone().multiply(MODEL_TO_GLTF);
+  motion.fromWorld = motion.toWorld.clone().invert();
+  // Each moving body's nodes, with where they sat as built.
+  motion.bodies = rig.bodies.map((_, k) => {
+    const nodes = [];
+    for (const label of bodyLabels(rig, k)) {
+      const name = THREE.PropertyBinding.sanitizeNodeName(label);
+      model.traverse((o) => o.name === name && nodes.push({ node: o, rest: o.matrixWorld.clone() }));
+    }
+    return nodes;
+  });
+  motion.rig = rig;
+  motionSlider.min = String(rig.range[0]);
+  motionSlider.max = String(rig.range[1]);
+  motionSlider.step = String((rig.range[1] - rig.range[0]) / 500);
+  motionSlider.value = "0";
+  motionHint.textContent = MOTION_HINT;
+  showMotionValue();
+  motionCard.hidden = false;
+}
+
+function showMotionValue() {
+  motionValue.textContent = `${motion.rig.value.toFixed(1)}${motion.rig.unit}`;
+}
+
+// Puts each moving part where the rig's pose says, relative to where it was built.
+function applyMotion() {
+  const { rig } = motion;
+  rig.bodies.forEach((_, k) => {
+    const [theta, dx, dy] = rig.pose.subarray(3 * k, 3 * k + 3);
+    const move = new THREE.Matrix4().makeRotationZ(theta).setPosition(dx, dy, 0);
+    const world = motion.toWorld.clone().multiply(move).multiply(motion.fromWorld);
+    for (const { node, rest } of motion.bodies[k]) {
+      const local = node.parent.matrixWorld.clone().invert().multiply(world.clone().multiply(rest));
+      local.decompose(node.position, node.quaternion, node.scale);
+    }
+  });
+  // Edge lines and section caps are redrawn once the motion stops.
+  if (edgeGroup) edgeGroup.visible = false;
+  if (capGroup) capGroup.visible = false;
+}
+
+function setMotionValue(target) {
+  const reached = moveTo(motion.rig, target);
+  applyMotion();
+  motionSlider.value = String(motion.rig.value);
+  showMotionValue();
+  motionHint.textContent = reached
+    ? MOTION_HINT
+    : "That's as far as it goes: any further and the parts would come apart at a joint.";
+}
+
+function settleMotion() {
+  if (currentModel) refreshHelpers();
+}
+
+function playMotion() {
+  const { rig } = motion;
+  const [low, high] = rig.range;
+  const middle = (low + high) / 2;
+  const swing = (high - low) / 2 || 1;
+  // Starts from the slider's position, then sweeps the whole range back and forth.
+  let phase = Math.asin(Math.max(-1, Math.min(1, (rig.value - middle) / swing)));
+  let last = performance.now();
+  motion.playing = true;
+  motionPlayBtn.classList.add("is-playing");
+  motionPlayBtn.title = "Pause";
+  const tick = (now) => {
+    if (!motion.playing) return;
+    phase += ((now - last) / 3200) * 2 * Math.PI;
+    last = now;
+    setMotionValue(middle + swing * Math.sin(phase));
+    motion.frame = requestAnimationFrame(tick);
+  };
+  motion.frame = requestAnimationFrame(tick);
+}
+
+function stopMotion(settle = true) {
+  if (!motion.playing) return;
+  motion.playing = false;
+  cancelAnimationFrame(motion.frame);
+  motionPlayBtn.classList.remove("is-playing");
+  motionPlayBtn.title = "Play the motion";
+  if (settle) settleMotion();
+}
+
+motionPlayBtn.addEventListener("click", () => {
+  if (motion.playing) stopMotion();
+  else if (motion.rig) playMotion();
+});
+
+motionSlider.addEventListener("input", () => {
+  stopMotion(false);
+  setMotionValue(Number(motionSlider.value));
+});
+motionSlider.addEventListener("change", settleMotion);
+
+motionResetBtn.addEventListener("click", () => {
+  if (!motion.rig) return;
+  stopMotion(false);
+  setMotionValue(0);
+  settleMotion();
+});
+
 /* ---------------- projects ---------------- */
 
 // Projects live in this browser (IndexedDB), so they need no server or account.
@@ -1373,10 +1508,11 @@ function serializeProject(p) {
       conversation: part.conversation,
       activeVersion: part.activeVersion,
       log: part.log,
-      versions: part.versions.map(({ code, glbBytes, parts, conversation }) => ({
+      versions: part.versions.map(({ code, glbBytes, parts, motion: motionSpec, conversation }) => ({
         code,
         glbBytes,
         parts: parts || null,
+        motion: motionSpec || null,
         conversation,
       })),
     })),
@@ -1758,6 +1894,7 @@ async function enterAssembly() {
   setMeasuring(false);
   setCodeDrawer(false);
   setExportMenu(false);
+  resetMotion();
   assembly.on = true;
   document.body.classList.add("assembly-mode");
   assemblyPanel.hidden = false;

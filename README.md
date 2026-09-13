@@ -25,6 +25,11 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   the built-in `soften()` helper, keeping holes, bores and main sizes. It's a
   new version, so the raw one is a click away, and `fillet_radius` shows up as
   an editable parameter.
+- **Motion** (for mechanisms): the model's code includes a `motion` dict
+  (the fixed part, pin and slide joints, which joint the slider drives), and
+  the Motion card's slider or ▶ Play moves the parts. A small solver
+  (`frontend/motion.js`) keeps every pin joined, so linkages follow correctly,
+  and stops where the mechanism can't physically go any further.
 - **Section view** (`S`): cut the part open along X, Y or Z to see bores and
   wall thicknesses.
 - **Measure** (`M`): click two points for the distance and its X/Y/Z

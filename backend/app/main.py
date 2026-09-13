@@ -198,8 +198,9 @@ _FEATURE_CHECKS = [
         lambda code: "children=" in code,
         "This is a mechanism with moving parts, but the code builds it as one solid. Build each moving part "
         "separately (the base, each arm or finger, a pin for each pivot), with every pivot's position in one "
-        "shared variable so the holes and pins line up, label each part, and return "
-        "result = Compound(label=..., children=[...]), as in the clamp example.",
+        "shared variable so the holes and pins line up, label each part, return "
+        "result = Compound(label=..., children=[...]), and describe how it moves in a motion dict, as in "
+        "the clamp example.",
         "The design is an assembly on purpose: its moving parts are separate solids joined by pins through "
         "aligned holes. Don't ask to fuse them.",
     ),
@@ -281,6 +282,7 @@ def _model_response(
         glb_base64=base64.b64encode(glb_bytes).decode("ascii"),
         attempts=attempts,
         parts=(stats or {}).get("assembly"),
+        motion=(stats or {}).get("motion"),
     )
 
 

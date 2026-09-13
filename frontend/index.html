@@ -122,6 +122,21 @@
   <p id="viewerHint">Drag to orbit · Scroll to zoom · Right-drag to pan</p>
 
   <div id="inspector">
+    <section id="motionCard" class="side-card" hidden>
+      <div class="params-header">
+        <span class="params-title">Motion</span>
+        <button type="button" id="motionResetBtn" class="text-btn" title="Back to the built position">Reset</button>
+      </div>
+      <div class="motion-row">
+        <button type="button" id="motionPlayBtn" class="icon-btn motion-play" title="Play the motion">
+          <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+          <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
+        </button>
+        <input id="motionSlider" type="range" aria-label="Drive position" />
+        <span id="motionValue" class="motion-value"></span>
+      </div>
+      <p id="motionHint" class="params-hint"></p>
+    </section>
     <section id="partsCard" class="side-card" hidden>
       <div class="params-header">
         <span class="params-title">Parts</span>

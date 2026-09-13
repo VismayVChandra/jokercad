@@ -761,6 +761,82 @@ button {
   color: var(--text-faint);
 }
 
+/* ---------- motion ---------- */
+
+.motion-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.motion-play {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.motion-play:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+.motion-play svg {
+  width: 14px;
+  height: 14px;
+}
+
+.motion-play .icon-pause,
+.motion-play.is-playing .icon-play {
+  display: none;
+}
+
+.motion-play.is-playing .icon-pause {
+  display: block;
+}
+
+#motionSlider {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.14);
+  outline: none;
+  cursor: pointer;
+}
+
+#motionSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 3px solid var(--accent);
+  border-radius: 99px;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(124, 108, 255, 0.2);
+  cursor: grab;
+}
+
+#motionSlider::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: 3px solid var(--accent);
+  border-radius: 99px;
+  background: #fff;
+  cursor: grab;
+}
+
+.motion-value {
+  min-width: 52px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  text-align: right;
+}
+
 /* ---------- assembly parts ---------- */
 
 .parts-hint {

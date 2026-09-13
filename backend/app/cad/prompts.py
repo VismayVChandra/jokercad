@@ -79,6 +79,14 @@ relative to each other) — see the clamp example at the end:
   gap between stacked moving parts. Parts must not overlap each other.
 - Give every part a short unique label, then return them together:
   `result = Compound(label="gripper", children=[base_part, left_arm, right_arm, *pins])`.
+- Say how it moves in a `motion` dict (see the clamp example); the viewer uses it to animate
+  the mechanism with a slider. `ground`: the part that stays still. `joints`: every pin joint,
+  as the two parts' labels and the pivot point they turn about (the same point as the holes);
+  a sliding joint gets `"slide": (dx, dy, 0)`, its direction, instead of a pivot. `"drive": 1`
+  marks the joints the slider turns (-1 turns the other way, for a mirrored part). `attached`:
+  parts that move together, like a pin fixed in its part. `range`: how far the slider goes
+  from the built position, in degrees (mm for a slide). Parts move flat in the XY plane,
+  turning about Z. For a linkage, list every pin joint: the viewer works out how links follow.
 
 Organic, sculpted or ergonomic parts (when asked for an organic, smooth or sculpted look):
 - Keep every hole, bore, pivot and mounting face exactly where it is, and the main sizes.
@@ -301,6 +309,17 @@ for name, pivot in (("left pin", left_pivot), ("right pin", right_pivot)):
     pins.append(pin)
 
 result = Compound(label="clamp", children=[base_part, left_arm, right_arm, *pins])
+
+# How it moves: each arm turns on its pin, the two mirrored; the pins stay in the base.
+motion = {
+    "ground": "base",
+    "joints": [
+        {"parts": ("base", "left arm"), "pivot": left_pivot, "drive": 1},
+        {"parts": ("base", "right arm"), "pivot": right_pivot, "drive": -1},
+    ],
+    "attached": [("left pin", "base"), ("right pin", "base")],
+    "range": (-30, 30),
+}
 ```
 """
 

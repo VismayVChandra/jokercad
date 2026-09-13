@@ -62,6 +62,12 @@ try:
     _stats = _jokercad_stats(result)
 except Exception:
     _stats = {{}}
+# How a mechanism moves, when the code says.
+try:
+    if isinstance(globals().get("motion"), dict):
+        _stats["motion"] = _jokercad_motion(motion)
+except Exception:
+    pass
 import json as _json
 with open(r"{stats_path}", "w", encoding="utf-8") as _stats_file:
     _json.dump(_stats, _stats_file)
@@ -131,6 +137,28 @@ def _jokercad_stats(result):
         stats["parts"] = parts
         stats["overlaps"] = overlaps
     return stats
+
+
+def _jokercad_motion(spec):
+    """The code's `motion` dict as plain JSON, for the viewer's motion slider."""
+    def point(p):
+        return [float(c) for c in list(p)[:3]]
+
+    out = {
+        "ground": str(spec.get("ground", "")),
+        "range": [float(v) for v in list(spec.get("range", (-30, 30)))[:2]],
+        "joints": [],
+        "attached": [[str(a), str(b)] for a, b in list(spec.get("attached", []))[:32]],
+    }
+    for joint in list(spec.get("joints", []))[:24]:
+        a, b = joint["parts"]
+        entry = {"parts": [str(a), str(b)], "drive": float(joint.get("drive", 0) or 0)}
+        if "slide" in joint:
+            entry["slide"] = point(joint["slide"])
+        else:
+            entry["pivot"] = point(joint["pivot"])
+        out["joints"].append(entry)
+    return out
 '''
 
 

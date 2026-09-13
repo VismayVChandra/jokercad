@@ -30,3 +30,5 @@ class GenerateResponse(BaseModel):
     note: str | None = None
     # For an assembly, the labels of its parts; the GLB names each part's node after its label.
     parts: list[str] | None = None
+    # How an assembly's parts move (the code's `motion` dict), for the motion slider.
+    motion: dict | None = None
