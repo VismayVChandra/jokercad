@@ -125,17 +125,48 @@ def _prepare_history(history: list[dict], prompt: str) -> list[dict]:
     return history
 
 
-# The model sometimes ignores the spur_gear() helper and draws teeth itself,
-# which produces the wrong shape, so a spur-gear request is checked in code.
-# Other gear types (and words like "gear-like" or "gear housing") aren't
-# something the helper makes, so they're left alone.
+# The model sometimes ignores what a prompt's engineering terms require (it
+# draws gear teeth by hand, or treats "flange" as the body itself), producing
+# the wrong part. So these requests are checked in code: when the prompt asks
+# for the feature and the code lacks it, that attempt isn't run and the model
+# is told what's missing.
+
+
 def _wants_spur_gear(prompt: str) -> bool:
+    # Other gear types, "gear-like" or "gear housing" aren't what spur_gear() makes.
     text = prompt.lower()
     asks_for_gear = re.search(r"\bspur\b", text) or (
         re.search(r"\bgears?\b(?!-)", text) and re.search(r"\b(teeth|tooth|module)\b", text)
     )
     other_type = re.search(r"\b(bevel|worm|rack|helical|herringbone|internal|planetary|sprocket)\b", text)
     return bool(asks_for_gear) and not other_type
+
+
+def _wants_flange(prompt: str) -> bool:
+    text = prompt.lower()
+    removing = re.search(r"\b(no|without|remove|delete|drop)\b[^.]{0,30}\bflange", text)
+    return bool(re.search(r"\bflange", text)) and not removing
+
+
+# A top-level variable giving the flange its own size, whether a number or a
+# formula (`flange_diameter = body_diameter + 5 * hole_diameter`). A thickness
+# alone doesn't count: the usual mistake is calling a slice of the body "the flange".
+_FLANGE_SIZE_VAR = re.compile(r"^\w*flange\w*(diameter|radius|width|length|size)\w*\s*=", re.MULTILINE)
+
+_FEATURE_CHECKS = [
+    (
+        _wants_spur_gear,
+        lambda code: "spur_gear(" in code,
+        "The gear teeth were drawn by hand. Use the built-in spur_gear() helper for the gear instead.",
+    ),
+    (
+        _wants_flange,
+        lambda code: bool(_FLANGE_SIZE_VAR.search(code)),
+        "The prompt asks for a flange, but the code has none. Build the flange as a separate plate wider than "
+        "the body, with its size (e.g. flange_diameter) and thickness as top-level parameters, and put the "
+        "mounting holes through the flange outside the body.",
+    ),
+]
 
 
 def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[dict]:
@@ -180,7 +211,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], prompt)
     base_messages = history + [{"role": "user", "content": prompt}]
     messages = base_messages
-    wants_spur_gear = _wants_spur_gear(prompt)
+    required_features = [(has, message) for wants, has, message in _FEATURE_CHECKS if wants(prompt)]
 
     provider_used = None
     code = None
@@ -196,10 +227,11 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
             code = extract_code(text)
 
-            if wants_spur_gear and "spur_gear(" not in code:
-                last_error = "The gear teeth were drawn by hand. Use the built-in spur_gear() helper for the gear instead."
-                logger.info("provider=%s attempt=%d drew gear teeth instead of calling spur_gear", provider_used, attempt)
-                messages = _repair_messages(base_messages, code, last_error)
+            missing = next((message for has, message in required_features if not has(code)), None)
+            if missing:
+                last_error = missing
+                logger.info("provider=%s attempt=%d missing a requested feature: %s", provider_used, attempt, missing[:60])
+                messages = _repair_messages(base_messages, code, missing)
                 continue
 
             result = run_build123d_code(code)

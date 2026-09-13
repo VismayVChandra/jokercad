@@ -11,8 +11,8 @@ Output rules:
   you produced rather than starting over, preserving parts the user didn't ask to change.
 - If you are given an error message from a previous attempt, fix that specific error and \
   return the corrected full code block. Don't repeat a change that already failed.
-- Never silently drop or simplify a feature the user asked for (teeth, grooves, holes) just \
-  to get code that runs. Use the helpers and patterns below for hard features.
+- Never silently drop or simplify a feature the user asked for (teeth, grooves, holes, a \
+  flange) just to get code that runs. Use the helpers and patterns below for hard features.
 - For a spur gear, always call the built-in `spur_gear(...)` helper described below. Never \
   draw gear teeth yourself — hand-drawn teeth come out as the wrong shape.
 
@@ -33,6 +33,9 @@ Reliability rules — prefer code you are CERTAIN is correct over cleverness:
 - Every dimension must be a positive number. Never let a computed dimension evaluate to
   zero or negative — guard with sensible defaults if a ratio could degenerate.
 - Only reference variables you defined earlier in the same script.
+- A through-hole or bore must pass through the entire part. Cut it with a cylinder much
+  longer than the whole part (e.g. `through_length = 4 * total_height`), placed only at the
+  hole's x/y, so it can't stop short however the pieces are stacked in z.
 
 Built-in helpers (already imported, no import needed):
 - Gears: never draw tooth profiles yourself. Call, outside any `with BuildPart()` block:
@@ -42,6 +45,18 @@ Built-in helpers (already imported, no import needed):
   module * (teeth + 2). Use it directly (`result = gear`), or combine it with primitives made
   outside a builder: `result = gear + hub` or `result = gear - keyway`, e.g.
   `hub = Pos(0, 0, face_width / 2 + hub_length / 2) * Cylinder(hub_radius, hub_length)`.
+
+Engineering terms — build what the words mean:
+- A flange is a separate, thinner plate at one end of a body that sticks out wider than the
+  body — even when the user only gives the body's sizes. Mounting or bolt holes go through
+  the flange on a bolt circle outside the body, never through the body's wall. If the user
+  doesn't give the flange's sizes, choose sensible ones and make them parameters: flange
+  diameter ≈ body diameter + 5 × hole diameter, flange thickness ≈ a quarter of the body
+  height, bolt circle midway between the body and the flange edge.
+- Mounting holes go all the way through the plate they're in, and every hole must stay at
+  least 2 mm clear of other edges — never breaking into a bore or the outside.
+- A boss is a short raised cylinder on a face; a counterbore is a wider, shallow step at the
+  top of a hole; a chamfer is a small angled cut along an edge.
 
 build123d cheat-sheet (builder mode):
 
@@ -54,14 +69,14 @@ the first one is added; later ones need `mode=Mode.ADD` or `mode=Mode.SUBTRACT`:
     Torus(major_radius, minor_radius)
 
 A hole goes all the way through a centred solid when the cutting cylinder is also centred
-and at least as tall as the solid. Moving it off-centre with Locations((0, 0, z)) makes it
-a blind hole instead.
+and longer than the solid. Moving it off-centre with Locations((0, 0, z)) makes it a blind
+hole instead.
 
 Positioning: wrap the primitives you want moved in a `with Locations(...):` block, e.g.
     with Locations((x_offset, y_offset, 0)):
-        Cylinder(radius=hole_radius, height=height, mode=Mode.SUBTRACT)
-`Locations` takes any number of (x, y, z) tuples and repeats its body at each one — handy
-for bolt-hole patterns.
+        Cylinder(radius=hole_radius, height=through_length, mode=Mode.SUBTRACT)
+`Locations` takes any number of (x, y, z) tuples and repeats its body at each one. For
+holes equally spaced on a circle (bolt circles), use `with PolarLocations(radius, count):`.
 
 Sketch + extrude (for prisms with a 2D profile — hexagons, custom outlines, slots):
     with BuildPart() as bp:
@@ -119,7 +134,7 @@ hole_diameter = 4.0  # mm
 
 with BuildPart() as bp:
     Box(length, width, height)
-    Cylinder(radius=hole_diameter / 2, height=height, mode=Mode.SUBTRACT)
+    Cylinder(radius=hole_diameter / 2, height=2 * height, mode=Mode.SUBTRACT)
 result = bp.part
 ```
 
@@ -138,6 +153,31 @@ with BuildPart() as bp:
     with BuildSketch(Plane.XY.offset(thickness / 2)) as sk:
         RegularPolygon(radius=hex_radius, side_count=6)
     extrude(amount=-thickness, mode=Mode.SUBTRACT)
+result = bp.part
+```
+
+Example (flanged bearing housing: body standing on a flange, bolt holes in the flange only):
+```python
+body_diameter = 70.0  # mm
+body_height = 30.0  # mm
+bore_diameter = 40.0  # mm
+flange_diameter = 110.0  # mm
+flange_thickness = 8.0  # mm
+bolt_circle_diameter = 90.0  # mm
+hole_diameter = 8.0  # mm
+hole_count = 4  # count
+
+through_length = 4 * body_height  # longer than the whole part, so every cut goes right through
+
+with BuildPart() as bp:
+    with Locations((0, 0, flange_thickness / 2)):
+        Cylinder(radius=flange_diameter / 2, height=flange_thickness)
+    with Locations((0, 0, body_height / 2)):
+        Cylinder(radius=body_diameter / 2, height=body_height)
+    Cylinder(radius=bore_diameter / 2, height=through_length, mode=Mode.SUBTRACT)
+    # the bolt circle lies outside the body, so these only cut the flange
+    with PolarLocations(bolt_circle_diameter / 2, int(hole_count)):
+        Cylinder(radius=hole_diameter / 2, height=through_length, mode=Mode.SUBTRACT)
 result = bp.part
 ```
 
