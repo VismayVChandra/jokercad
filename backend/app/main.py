@@ -153,6 +153,17 @@ def _wants_flange(prompt: str) -> bool:
     return bool(re.search(r"\bflange", text)) and not removing
 
 
+def _wants_assembly(prompt: str) -> bool:
+    # Things whose parts move relative to each other, unless asked for as one piece.
+    text = prompt.lower()
+    moving = re.search(
+        r"\b(grippers?|hinges?|hinged|linkages?|mechanisms?|assembl(y|ies)|moving parts|articulated|pivoting|pivots)\b",
+        text,
+    )
+    one_piece = re.search(r"\b(one|single)[ -](piece|part|solid|body)\b", text)
+    return bool(moving) and not one_piece
+
+
 # A top-level variable giving the flange its own size, whether a number or a
 # formula (`flange_diameter = body_diameter + 5 * hole_diameter`). A thickness
 # alone doesn't count: the usual mistake is calling a slice of the body "the flange".
@@ -176,6 +187,16 @@ _FEATURE_CHECKS = [
         "The request asks for a flange, so the part is meant to be wider than the body diameter the user gave: "
         "the flange sticks out beyond the body and its mounting holes sit outside the body. Don't flag the "
         "overall width or the flange.",
+    ),
+    (
+        _wants_assembly,
+        lambda code: "children=" in code,
+        "This is a mechanism with moving parts, but the code builds it as one solid. Build each moving part "
+        "separately (the base, each arm or finger, a pin for each pivot), with every pivot's position in one "
+        "shared variable so the holes and pins line up, label each part, and return "
+        "result = Compound(label=..., children=[...]), as in the clamp example.",
+        "The design is an assembly on purpose: its moving parts are separate solids joined by pins through "
+        "aligned holes. Don't ask to fuse them.",
     ),
 ]
 
@@ -210,7 +231,9 @@ def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[d
     ]
 
 
-def _model_response(glb_bytes: bytes, code: str, provider_used: str | None, attempts: int) -> GenerateResponse:
+def _model_response(
+    glb_bytes: bytes, code: str, provider_used: str | None, attempts: int, stats: dict | None = None
+) -> GenerateResponse:
     if len(glb_bytes) > MAX_GLB_BYTES:
         return GenerateResponse(
             ok=False,
@@ -225,6 +248,7 @@ def _model_response(glb_bytes: bytes, code: str, provider_used: str | None, atte
         code=code,
         glb_base64=base64.b64encode(glb_bytes).decode("ascii"),
         attempts=attempts,
+        parts=(stats or {}).get("assembly"),
     )
 
 
@@ -275,7 +299,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
             if result.ok:
                 logger.info("provider=%s attempt=%d ok (%d bytes)", provider_used, attempt, len(result.glb_bytes))
-                response = _model_response(result.glb_bytes, code, provider_used, attempt)
+                response = _model_response(result.glb_bytes, code, provider_used, attempt, result.stats)
                 problem = _review_part(requests_so_far, code, result.stats, review_notes) if response.ok else None
                 if not problem:
                     return response
@@ -321,7 +345,7 @@ def run(req: RunRequest, request: Request) -> GenerateResponse:
 
     result = run_build123d_code(req.code)
     if result.ok:
-        return _model_response(result.glb_bytes, req.code, None, 0)
+        return _model_response(result.glb_bytes, req.code, None, 0, result.stats)
     return GenerateResponse(ok=False, code=req.code, error=result.error)
 
 

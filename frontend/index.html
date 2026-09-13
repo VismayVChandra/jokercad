@@ -100,14 +100,23 @@
   <div id="viewerStatus" hidden></div>
   <p id="viewerHint">Drag to orbit · Scroll to zoom · Right-drag to pan</p>
 
-  <section id="paramsCard" hidden>
-    <div class="params-header">
-      <span class="params-title">Parameters</span>
-      <span class="params-badge">No AI call</span>
-    </div>
-    <div id="paramsList"></div>
-    <p class="params-hint">Change a value and press Enter — the part rebuilds from the same code.</p>
-  </section>
+  <div id="inspector">
+    <section id="partsCard" class="side-card" hidden>
+      <div class="params-header">
+        <span class="params-title">Parts</span>
+        <span class="parts-hint">Click to hide</span>
+      </div>
+      <div id="partsList"></div>
+    </section>
+    <section id="paramsCard" class="side-card" hidden>
+      <div class="params-header">
+        <span class="params-title">Parameters</span>
+        <span class="params-badge">No AI call</span>
+      </div>
+      <div id="paramsList"></div>
+      <p class="params-hint">Change a value and press Enter — the part rebuilds from the same code.</p>
+    </section>
+  </div>
 
   <aside id="panel">
     <button type="button" id="panelHandle" class="panel-handle" aria-label="Show or hide the conversation" aria-expanded="true"><span></span></button>
@@ -131,8 +140,8 @@
           <button type="button" class="chip" data-prompt="an L-bracket with 50mm arms, 5mm thick, with a 6mm mounting hole in each arm">
             <span class="chip-title">L-bracket</span><span class="chip-desc">50 mm arms · 2 holes</span>
           </button>
-          <button type="button" class="chip" data-prompt="a 30mm diameter, 8mm thick knob with a 6mm hexagonal hole through the center">
-            <span class="chip-title">Hex knob</span><span class="chip-desc">Ø30 mm · hex socket</span>
+          <button type="button" class="chip" data-prompt="a two-finger gripper: a base plate with mounting holes, two symmetrical fingers that pivot on 6mm pins, and a pin for each pivot, designed to be 3D printed">
+            <span class="chip-title">Gripper</span><span class="chip-desc">Assembly · pivoting fingers</span>
           </button>
         </div>
       </div>

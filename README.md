@@ -27,9 +27,11 @@ attempts.
 ## Free by design
 
 - **Geometry**: `build123d` (OpenCascade) — open source.
-- **LLM**: a provider router tries **Groq** (free tier) → **Gemini** (free
+- **LLM**: a provider router tries **Gemini** (free tier) → **Groq** (free
   tier) → **Ollama** (local, no key) in order, falling through automatically
   if one is unconfigured, rate-limited, or down. You only need one of them.
+  Gemini goes first because it writes much better code for complex parts;
+  Groq answers the quick check of each built part.
   Free tiers limit each model separately, so each provider also falls back
   to its other models (`GROQ_FALLBACK_MODELS`, `GEMINI_FALLBACK_MODELS`)
   before giving up.
@@ -77,7 +79,7 @@ functions — so it relies on Vercel's Large Functions beta (up to 5 GB).
    - `GROQ_API_KEY` (and/or `GEMINI_API_KEY`)
    - `APP_PASSWORD` — a long random password. Without it, the deployment
      refuses to generate.
-   - optionally `LLM_PROVIDER_ORDER=groq,gemini`, since Ollama isn't available there
+   - optionally `LLM_PROVIDER_ORDER=gemini,groq`, since Ollama isn't available there
 3. Redeploy.
 
 The server keeps no state between requests: the browser sends the conversation

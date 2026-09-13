@@ -49,6 +49,8 @@ const modelTools = [...document.querySelectorAll(".model-tool")];
 const viewerStatus = document.getElementById("viewerStatus");
 const paramsCard = document.getElementById("paramsCard");
 const paramsList = document.getElementById("paramsList");
+const partsCard = document.getElementById("partsCard");
+const partsList = document.getElementById("partsList");
 const lockScreen = document.getElementById("lockScreen");
 const lockForm = document.getElementById("lockForm");
 const lockInput = document.getElementById("lockInput");
@@ -232,6 +234,7 @@ function buildEdges(model) {
     if (child.geometry.index) posOnly.setIndex(child.geometry.index.clone());
     const edges = new THREE.EdgesGeometry(mergeVertices(posOnly, 1e-4), 30);
     const lines = new THREE.LineSegments(edges, edgeMaterial);
+    lines.userData.source = child;
     child.getWorldPosition(lines.position);
     child.getWorldQuaternion(lines.quaternion);
     child.getWorldScale(lines.scale);
@@ -290,7 +293,7 @@ function describePart({ size, volume }) {
   return `${dims} mm · ≈ ${vol}`;
 }
 
-function showModel(gltf, reframe) {
+function showModel(gltf, reframe, parts) {
   if (currentModel) scene.remove(currentModel);
   if (edgeGroup) scene.remove(edgeGroup);
   if (capGroup) scene.remove(capGroup);
@@ -303,9 +306,7 @@ function showModel(gltf, reframe) {
   // authored in mm, so scale back up to keep the viewer's camera math (tuned
   // for mm-scale numbers) from clipping small parts against the near plane.
   currentModel.scale.setScalar(1000);
-  currentModel.traverse((child) => {
-    if (child.isMesh) child.material = modelMaterial;
-  });
+  colorParts(currentModel, parts);
   scene.add(currentModel);
   placeModel(currentModel, reframe);
 
@@ -325,11 +326,11 @@ function showModel(gltf, reframe) {
   if (!busy) showViewerStatus(idleStatusText());
 }
 
-function loadModel(glbBytes, reframe) {
+function loadModel(glbBytes, reframe, parts) {
   loader.parse(
     glbBytes.buffer,
     "",
-    (gltf) => showModel(gltf, reframe),
+    (gltf) => showModel(gltf, reframe, parts),
     (err) => {
       const el = document.createElement("div");
       chatLog.appendChild(el);
@@ -420,8 +421,8 @@ let busy = false;
 
 const fence = (code) => "```python\n" + code + "\n```";
 
-function addVersion(entryEl, code, glbBytes, reframe) {
-  versions.push({ code, glbBytes, conversation: conversation.slice(), entryEl });
+function addVersion(entryEl, code, glbBytes, reframe, parts) {
+  versions.push({ code, glbBytes, parts, conversation: conversation.slice(), entryEl });
   const index = versions.length - 1;
 
   const tag = document.createElement("span");
@@ -457,7 +458,7 @@ function showVersion(index, reframe) {
   codeView.textContent = version.code;
   modelTools.forEach((btn) => (btn.disabled = false));
   renderParams(version.code);
-  loadModel(version.glbBytes, reframe);
+  loadModel(version.glbBytes, reframe, version.parts);
   if (narrowScreen.matches) setPanelCollapsed(true);
 }
 
@@ -561,7 +562,7 @@ async function rebuildWithParam(param, field) {
       conversation[conversation.length - 1] = { role: "assistant", content: fence(data.code) };
     }
     setEntrySuccess(pending, label);
-    addVersion(pending, data.code, base64ToBytes(data.glb_base64), false);
+    addVersion(pending, data.code, base64ToBytes(data.glb_base64), false, data.parts);
   } else {
     if (data) setEntryError(pending, `Couldn't rebuild with ${label}: ${data.error}`);
     field.value = String(param.value);
@@ -726,7 +727,7 @@ form.addEventListener("submit", async (e) => {
     const retryNote = data.attempts > 1 ? ` · self-repaired after ${data.attempts} attempts` : "";
     setEntrySuccess(pending, `Built via ${data.provider_used}${retryNote}`);
     setProviderBadge(data.provider_used);
-    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true);
+    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true, data.parts);
     if (data.note) {
       // The part built, but the automatic review still sees a problem.
       const noteEl = document.createElement("div");
@@ -744,6 +745,69 @@ form.addEventListener("submit", async (e) => {
   if (lockScreen.hidden) input.focus();
 });
 
+/* ---------------- assemblies ---------------- */
+
+// A colour for each part of an assembly; the first is the single-part colour.
+const PART_COLORS = [0x8b93f0, 0x4fd1b0, 0xf2b35b, 0xe58fd8, 0x6cb8ff, 0xb3e06b, 0xff8f8f, 0xc8a7ff];
+const partMaterials = PART_COLORS.map(
+  (color) => new THREE.MeshStandardMaterial({ color, metalness: 0.32, roughness: 0.42 })
+);
+
+// Whether an object in the model is shown, i.e. its part hasn't been hidden.
+function shownInModel(object) {
+  for (let o = object; o && o !== currentModel; o = o.parent) if (!o.visible) return false;
+  return true;
+}
+
+// Edge lines and section caps belong to their mesh's part, so they hide with it.
+function syncPartHelpers() {
+  for (const group of [edgeGroup, capGroup]) {
+    if (group) group.children.forEach((helper) => (helper.visible = shownInModel(helper.userData.source)));
+  }
+}
+
+// parts: the assembly's part labels, from the server. glTF export names each
+// part's node after its label (three.js sanitizes the name).
+function colorParts(model, parts) {
+  model.traverse((child) => {
+    if (child.isMesh) child.material = modelMaterial;
+  });
+  const groups = [];
+  for (const label of parts || []) {
+    const name = THREE.PropertyBinding.sanitizeNodeName(label);
+    if (!label || groups.some((g) => g.label === label)) continue;
+    const nodes = [];
+    model.traverse((o) => o.name === name && nodes.push(o));
+    if (nodes.length) groups.push({ label, nodes });
+  }
+
+  partsList.replaceChildren();
+  partsCard.hidden = groups.length < 2;
+  if (groups.length < 2) return;
+
+  groups.forEach((group, i) => {
+    const material = partMaterials[i % partMaterials.length];
+    group.nodes.forEach((node) => node.traverse((o) => o.isMesh && (o.material = material)));
+
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "part-chip";
+    chip.title = `Show or hide the ${group.label}`;
+    const dot = document.createElement("span");
+    dot.className = "part-dot";
+    dot.style.background = `#${material.color.getHexString()}`;
+    const text = document.createElement("span");
+    text.textContent = group.label;
+    chip.append(dot, text);
+    chip.addEventListener("click", () => {
+      const hidden = chip.classList.toggle("is-hidden");
+      group.nodes.forEach((node) => (node.visible = !hidden));
+      syncPartHelpers();
+    });
+    partsList.append(chip);
+  });
+}
+
 /* ---------------- section view ---------------- */
 
 function buildCaps(model) {
@@ -751,6 +815,7 @@ function buildCaps(model) {
   model.traverse((child) => {
     if (!child.isMesh) return;
     const cap = new THREE.Mesh(child.geometry, capMaterial);
+    cap.userData.source = child;
     child.getWorldPosition(cap.position);
     child.getWorldQuaternion(cap.quaternion);
     child.getWorldScale(cap.scale);
@@ -780,7 +845,7 @@ function updateSectionPlane() {
 function setSection(on) {
   section.on = on && Boolean(currentModel);
   const planes = section.on ? [sectionPlane] : null;
-  for (const material of [modelMaterial, edgeMaterial, capMaterial]) {
+  for (const material of [modelMaterial, edgeMaterial, capMaterial, ...partMaterials]) {
     material.clippingPlanes = planes;
     material.needsUpdate = true;
   }
@@ -846,7 +911,11 @@ function pickPoint(event) {
   const targets = section.on && capGroup ? [currentModel, capGroup] : [currentModel];
   const hit = raycaster
     .intersectObjects(targets, true)
-    .find((h) => !section.on || sectionPlane.distanceToPoint(h.point) >= 0);
+    .find(
+      (h) =>
+        shownInModel(h.object.userData.source || h.object) &&
+        (!section.on || sectionPlane.distanceToPoint(h.point) >= 0)
+    );
   if (!hit) return null;
   if (hit.object.material === capMaterial) return raycaster.ray.intersectPlane(sectionPlane, new THREE.Vector3());
 
@@ -1059,7 +1128,7 @@ async function buildSharedPart(code) {
     // Follow-up prompts then modify the shared part.
     conversation.push({ role: "user", content: "Start from this part." }, { role: "assistant", content: fence(data.code) });
     setEntrySuccess(pending, "Opened the shared part");
-    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true);
+    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true, data.parts);
   } else if (data) {
     setEntryError(pending, `Couldn't build the shared part: ${data.error}`);
   }

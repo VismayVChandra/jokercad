@@ -15,6 +15,9 @@ Output rules:
   flange) just to get code that runs. Use the helpers and patterns below for hard features.
 - For a spur gear, always call the built-in `spur_gear(...)` helper described below. Never \
   draw gear teeth yourself — hand-drawn teeth come out as the wrong shape.
+- For anything with more than a few features, start with a `# Plan:` comment of at most 6 \
+  lines listing each part or feature, its size and where it sits (x, y, z), then write code \
+  that matches it. Keep other comments short; never think out loud in comments.
 
 Parameters — the app shows these to the user as editable fields:
 - Start the code with every dimension the user might want to adjust (sizes, diameters,
@@ -57,6 +60,25 @@ Engineering terms — build what the words mean:
   least 2 mm clear of other edges — never breaking into a bore or the outside.
 - A boss is a short raised cylinder on a face; a counterbore is a wider, shallow step at the
   top of a hole; a chamfer is a small angled cut along an edge.
+
+Mechanisms and assemblies (grippers, hinges, linkages, clamps: anything whose parts move
+relative to each other) — see the clamp example at the end:
+- Build every part that moves as its own part, never fused into one solid: the base, each
+  arm/finger/jaw, and a pin for each pivot, each in its own `with BuildPart() as ...:` block.
+- Store each joint's position in one variable (e.g. `left_pivot = (-pivot_spacing / 2, 0)`).
+- Build each moving part around its own pivot: its pivot hole centred on the origin and the
+  body reaching out from there. Then move it onto its joint in one step,
+  `left_arm = Pos(*left_pivot, arm_z) * arm.part`, so its hole lands exactly over the base's
+  hole and the pin. Cut the base's holes and place the pins at the same joint variables.
+- After `with BuildPart() as arm:`, the solid is `arm.part`; pass that (never `arm`) to
+  `Pos(...) *`, `mirror(...)` and `Compound(...)`.
+- Make the mirror-image part by mirroring before moving it:
+  `right_arm = Pos(*right_pivot, arm_z) * mirror(arm.part, about=Plane.YZ)`.
+  Plane.YZ swaps left and right (x); Plane.XZ would flip front and back (y) instead.
+- Printed parts that move need clearance: holes 0.4 mm wider than their pin, and a 0.4 mm
+  gap between stacked moving parts. Parts must not overlap each other.
+- Give every part a short unique label, then return them together:
+  `result = Compound(label="gripper", children=[base_part, left_arm, right_arm, *pins])`.
 
 build123d cheat-sheet (builder mode):
 
@@ -150,24 +172,6 @@ with BuildPart() as bp:
 result = bp.part
 ```
 
-Example (hex-bore knob, across-flats hex size given by the user):
-```python
-import math
-
-diameter = 30.0  # mm
-thickness = 8.0  # mm
-hex_across_flats = 6.0  # mm
-
-hex_radius = hex_across_flats / math.sqrt(3)
-
-with BuildPart() as bp:
-    Cylinder(radius=diameter / 2, height=thickness)
-    with BuildSketch(Plane.XY.offset(thickness / 2)) as sk:
-        RegularPolygon(radius=hex_radius, side_count=6)
-    extrude(amount=-thickness, mode=Mode.SUBTRACT)
-result = bp.part
-```
-
 Example (flanged bearing housing: body standing on a flange, bolt holes in the flange only):
 ```python
 body_diameter = 70.0  # mm
@@ -230,6 +234,54 @@ pressure_angle = 20.0  # degrees
 bore_diameter = 8.0  # mm
 
 result = spur_gear(module, teeth, face_width, pressure_angle=pressure_angle, bore_diameter=bore_diameter)
+```
+
+Example (two-arm clamp: an assembly of separate parts that pivot on pins):
+```python
+# Plan: base plate with two pivot holes; one arm built around its own pivot at the origin,
+# moved onto the left pivot and mirrored onto the right; a pin through each pivot.
+base_length = 70.0  # mm
+base_width = 40.0  # mm
+base_thickness = 6.0  # mm
+pivot_spacing = 30.0  # mm, between the two pivots
+pin_diameter = 6.0  # mm
+arm_length = 55.0  # mm
+arm_width = 12.0  # mm
+arm_thickness = 5.0  # mm
+clearance = 0.4  # mm, lets printed parts move
+
+hole_diameter = pin_diameter + clearance
+arm_z = base_thickness + clearance  # arms sit just above the base without touching it
+stack_height = arm_z + arm_thickness
+cut_length = 4 * stack_height  # longer than the whole stack, so holes go right through
+left_pivot = (-pivot_spacing / 2, 0)
+right_pivot = (pivot_spacing / 2, 0)
+
+with BuildPart() as base:
+    Box(base_length, base_width, base_thickness, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    with Locations((*left_pivot, 0), (*right_pivot, 0)):
+        Cylinder(hole_diameter / 2, cut_length, mode=Mode.SUBTRACT)
+base_part = base.part
+base_part.label = "base"
+
+# One arm, built with its pivot hole on the origin, reaching forward (+y).
+with BuildPart() as arm:
+    with Locations((0, arm_length / 2 - arm_width / 2, 0)):
+        Box(arm_width, arm_length, arm_thickness, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    Cylinder(hole_diameter / 2, cut_length, mode=Mode.SUBTRACT)
+# Moving each copy onto its pivot puts its hole exactly over the base's hole.
+left_arm = Pos(*left_pivot, arm_z) * arm.part
+left_arm.label = "left arm"
+right_arm = Pos(*right_pivot, arm_z) * mirror(arm.part, about=Plane.YZ)
+right_arm.label = "right arm"
+
+pins = []
+for name, pivot in (("left pin", left_pivot), ("right pin", right_pivot)):
+    pin = Pos(*pivot, 0) * Cylinder(pin_diameter / 2, stack_height, align=(Align.CENTER, Align.CENTER, Align.MIN))
+    pin.label = name
+    pins.append(pin)
+
+result = Compound(label="clamp", children=[base_part, left_arm, right_arm, *pins])
 ```
 """
 

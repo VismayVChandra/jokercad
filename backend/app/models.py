@@ -28,3 +28,5 @@ class GenerateResponse(BaseModel):
     attempts: int = 0
     # Set when the part built but the automatic review still sees a problem.
     note: str | None = None
+    # For an assembly, the labels of its parts; the GLB names each part's node after its label.
+    parts: list[str] | None = None

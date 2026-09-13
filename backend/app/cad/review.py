@@ -7,8 +7,12 @@ Decide whether the part plausibly matches the requests. Flag only clear, specifi
 - an overall size that can't be right for the request (e.g. a stand meant to hold a phone
   upright that is only 15 mm tall);
 - a feature in an impossible place (a hole breaking into a bore, a cut that stops short of
-  going through, pieces floating apart from the part).
-Ignore style, naming, and reasonable choices the user left open. A size the user gave for one
+  going through, pieces floating apart from the part);
+- in a mechanism or assembly: parts that should move fused into one solid, a part that
+  doesn't reach the pivot, pin or part it should sit on, pivot holes in mating parts that
+  don't line up, or parts overlapping each other (moving parts need a small gap).
+Ignore style, naming, and reasonable choices the user left open. Separate parts in an
+assembly are intended, joined by pins through aligned holes. A size the user gave for one
 feature (say, a body's diameter) doesn't limit other features they asked for: a flange is meant
 to be wider than the body, with its mounting holes outside the body, and a base can be wider
 than what stands on it. Never ask to remove or shrink a feature the request mentions. If
@@ -29,6 +33,15 @@ def build_review_request(requests: list[str], code: str, stats: dict, notes: lis
         f"(x {lo[0]:.1f} to {hi[0]:.1f}, y {lo[1]:.1f} to {hi[1]:.1f}, z {lo[2]:.1f} to {hi[2]:.1f}), "
         f"volume {stats['volume'] / 1000:.2f} cm3, {stats['solids']} separate solid(s)."
     )
+    parts = stats.get("parts") or []
+    if parts:
+        listing = "\n".join(
+            f"- {p['name']}: x {p['min'][0]:.1f} to {p['max'][0]:.1f}, y {p['min'][1]:.1f} to {p['max'][1]:.1f}, "
+            f"z {p['min'][2]:.1f} to {p['max'][2]:.1f}, volume {p['volume'] / 1000:.2f} cm3"
+            for p in parts
+        )
+        clashes = "; ".join(f"{a} and {b} share {v:.0f} mm3" for a, b, v in stats.get("overlaps") or []) or "none"
+        measurements += f"\nParts:\n{listing}\nOverlapping parts: {clashes}."
     already = f"\n\nAlready checked, and correct as built:{checked}" if checked else ""
     return f"Requests, oldest first:\n{listed}\n\n{measurements}{already}\n\nCode:\n```python\n{code}\n```"
 

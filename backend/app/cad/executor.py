@@ -55,15 +55,9 @@ if hasattr(result, "is_valid") and not result.is_valid:
     raise RuntimeError("`result` is not a valid/manifold solid (self-intersecting or malformed geometry).")
 
 # Measurements for the review step; never allowed to break the build.
+{stats_code}
 try:
-    _box = result.bounding_box()
-    _stats = {{
-        "size": [_box.size.X, _box.size.Y, _box.size.Z],
-        "min": [_box.min.X, _box.min.Y, _box.min.Z],
-        "max": [_box.max.X, _box.max.Y, _box.max.Z],
-        "volume": result.volume,
-        "solids": len(result.solids()),
-    }}
+    _stats = _jokercad_stats(result)
 except Exception:
     _stats = {{}}
 import json as _json
@@ -79,6 +73,47 @@ _STEP_EXPORT = """\
 from build123d import export_step
 export_step(result, r"{step_path}")
 """
+
+# Measures the built part for the review step: its overall size, and for an
+# assembly (or a part made of separate solids) each piece and any overlaps
+# between pieces, which show parts colliding or not meeting where they should.
+_STATS_CODE = '''\
+def _jokercad_stats(result):
+    def corners(shape):
+        box = shape.bounding_box()
+        return [box.min.X, box.min.Y, box.min.Z], [box.max.X, box.max.Y, box.max.Z]
+
+    lo, hi = corners(result)
+    stats = {
+        "size": [b - a for a, b in zip(lo, hi)],
+        "min": lo,
+        "max": hi,
+        "volume": result.volume,
+        "solids": len(result.solids()),
+    }
+    children = list(getattr(result, "children", None) or [])
+    if children:
+        stats["assembly"] = [getattr(c, "label", "") or "" for c in children]
+    pieces = children or list(result.solids())
+    if 1 < len(pieces) <= 8:
+        parts = []
+        for i, piece in enumerate(pieces):
+            plo, phi = corners(piece)
+            name = getattr(piece, "label", "") or f"solid {i + 1}"
+            parts.append({"name": name, "min": plo, "max": phi, "volume": piece.volume})
+        overlaps = []
+        for i in range(len(pieces)):
+            for j in range(i + 1, len(pieces)):
+                try:
+                    shared = (pieces[i] & pieces[j]).volume
+                except Exception:
+                    continue
+                if shared > 0.5:
+                    overlaps.append([parts[i]["name"], parts[j]["name"], shared])
+        stats["parts"] = parts
+        stats["overlaps"] = overlaps
+    return stats
+'''
 
 
 @dataclass
@@ -140,6 +175,7 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
                 glb_path=glb_path,
                 stats_path=stats_path,
                 engine_exit=_ENGINE_UNAVAILABLE_EXIT,
+                stats_code=_STATS_CODE,
                 step_export=_STEP_EXPORT.format(step_path=step_path) if step else "",
             ),
             encoding="utf-8",

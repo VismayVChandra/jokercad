@@ -1,7 +1,7 @@
 import os
 import re
 
-from .base import ProviderError
+from .base import LLMProvider, ProviderError
 from .gemini_provider import GeminiProvider
 from .groq_provider import GroqProvider
 from .ollama_provider import OllamaProvider
@@ -83,22 +83,36 @@ class LLMRouter:
     """Tries providers in order, falling through on failure so a rate-limited or
     unconfigured free-tier provider doesn't block generation."""
 
-    def __init__(self, order: list[str] | None = None):
-        order = order or os.getenv("LLM_PROVIDER_ORDER", "groq,gemini,ollama").split(",")
-        self.providers = [_ALL_PROVIDERS[name.strip()]() for name in order if name.strip() in _ALL_PROVIDERS]
+    def __init__(self, order: list[str] | None = None, review_order: list[str] | None = None):
+        # Gemini writes far better code for complex parts (assemblies, mechanisms)
+        # than Groq's models, so it builds first. Reviews are short checks that
+        # Groq answers quickly, which also leaves Gemini's small per-minute
+        # allowance for building parts.
+        order = order or os.getenv("LLM_PROVIDER_ORDER", "gemini,groq,ollama").split(",")
+        review_order = review_order or os.getenv("REVIEW_PROVIDER_ORDER", "groq,gemini").split(",")
+        instances: dict[str, LLMProvider] = {}
+
+        def build(names: list[str]) -> list[LLMProvider]:
+            names = [n.strip() for n in names if n.strip() in _ALL_PROVIDERS]
+            return [instances.setdefault(n, _ALL_PROVIDERS[n]()) for n in names]
+
+        self.providers = build(order)
+        self.review_providers = build(review_order)
 
     def generate(self, system_prompt: str, messages: list[dict]) -> tuple[str, str]:
         """Returns (text, provider_name_used)."""
-        return self._first_answer(system_prompt, messages, review=False)
+        return self._first_answer(self.providers, system_prompt, messages, review=False)
 
     def review(self, system_prompt: str, messages: list[dict]) -> str:
         """A quick check of a built part; providers may use a smaller model for it."""
-        text, _ = self._first_answer(system_prompt, messages, review=True)
+        text, _ = self._first_answer(self.review_providers, system_prompt, messages, review=True)
         return text
 
-    def _first_answer(self, system_prompt: str, messages: list[dict], review: bool) -> tuple[str, str]:
+    def _first_answer(
+        self, providers: list[LLMProvider], system_prompt: str, messages: list[dict], review: bool
+    ) -> tuple[str, str]:
         attempts: dict[str, str] = {}
-        for provider in self.providers:
+        for provider in providers:
             if not provider.is_configured():
                 attempts[provider.name] = _NOT_CONFIGURED
                 continue

@@ -641,12 +641,26 @@ button {
 
 /* ---------- parameters ---------- */
 
-#paramsCard {
+/* the parts and parameters cards, stacked at the bottom right */
+#inspector {
   position: fixed;
   right: 20px;
   bottom: 20px;
   width: 290px;
   max-height: calc(100vh - 160px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 15;
+}
+
+#paramsCard {
+  flex-shrink: 1;
+}
+
+.side-card {
+  flex-shrink: 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 14px 14px 12px;
   background: var(--surface);
@@ -745,6 +759,48 @@ button {
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-faint);
+}
+
+/* ---------- assembly parts ---------- */
+
+.parts-hint {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+#partsList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.part-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 11.5px;
+  transition: opacity 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.part-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.part-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 99px;
+}
+
+.part-chip.is-hidden {
+  opacity: 0.4;
+  text-decoration: line-through;
 }
 
 /* ---------- versions ---------- */
@@ -851,13 +907,14 @@ button {
     top: 118px;
     bottom: auto;
   }
-  #paramsCard {
+  #inspector {
     top: 158px;
     bottom: auto;
     left: 12px;
     right: 12px;
     width: auto;
     max-height: 22vh;
+    gap: 6px;
   }
 }
 
@@ -1287,7 +1344,7 @@ button {
   body.section-on #viewerStatus {
     top: 166px;
   }
-  body.section-on #paramsCard {
+  body.section-on #inspector {
     top: 206px;
   }
 }
