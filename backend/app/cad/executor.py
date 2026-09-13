@@ -8,6 +8,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 # The first build123d/OCP import in a fresh process can take 60-90s on Windows
 # (antivirus scanning the native OpenCascade DLLs); later runs take seconds.
 EXECUTION_TIMEOUT_SECONDS = 120
@@ -66,6 +68,22 @@ with open(r"{stats_path}", "w", encoding="utf-8") as _stats_file:
 
 from build123d import export_gltf
 export_gltf(result, r"{glb_path}", binary=True)
+
+# Each part's triangles, for the picture the review looks at; never allowed to
+# break the build.
+try:
+    import numpy as _np
+    _pieces = list(getattr(result, "children", None) or []) or [result]
+    _size = result.bounding_box().size
+    _tolerance = max(_size.X, _size.Y, _size.Z) / 400 or 0.1
+    _arrays = {{}}
+    for _i, _piece in enumerate(_pieces[:16]):
+        _vertices, _triangles = _piece.tessellate(_tolerance, 0.3)
+        _arrays["v%d" % _i] = _np.array([(_p.X, _p.Y, _p.Z) for _p in _vertices], dtype=_np.float32)
+        _arrays["t%d" % _i] = _np.array(_triangles, dtype=_np.int32).reshape(-1, 3)
+    _np.savez_compressed(r"{mesh_path}", **_arrays)
+except Exception:
+    pass
 {step_export}
 """
 
@@ -129,6 +147,8 @@ class ExecutionResult:
     stats: dict | None = None
     # The part as a STEP file, when requested.
     step_bytes: bytes | None = None
+    # (vertices, triangles) per part, for drawing the part for the review.
+    mesh: list | None = None
 
 
 def extract_code(llm_text: str) -> str:
@@ -167,6 +187,7 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
         glb_path = Path(work_dir) / "part.glb"
         stats_path = Path(work_dir) / "stats.json"
         step_path = Path(work_dir) / "part.step"
+        mesh_path = Path(work_dir) / "mesh.npz"
         script_path = Path(work_dir) / "run.py"
         shutil.copyfile(_PARTS_LIBRARY, Path(work_dir) / "jokercad_parts.py")
         script_path.write_text(
@@ -174,6 +195,7 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
                 user_code=code,
                 glb_path=glb_path,
                 stats_path=stats_path,
+                mesh_path=mesh_path,
                 engine_exit=_ENGINE_UNAVAILABLE_EXIT,
                 stats_code=_STATS_CODE,
                 step_export=_STEP_EXPORT.format(step_path=step_path) if step else "",
@@ -210,5 +232,20 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
         stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else None
         step_bytes = step_path.read_bytes() if step and step_path.exists() else None
         return ExecutionResult(
-            ok=True, code=code, glb_bytes=glb_path.read_bytes(), stats=stats or None, step_bytes=step_bytes
+            ok=True,
+            code=code,
+            glb_bytes=glb_path.read_bytes(),
+            stats=stats or None,
+            step_bytes=step_bytes,
+            mesh=_load_mesh(mesh_path),
         )
+
+
+def _load_mesh(path: Path) -> list | None:
+    if not path.exists():
+        return None
+    try:
+        with np.load(path) as data:
+            return [(data[f"v{i}"], data[f"t{i}"]) for i in range(len(data.files) // 2)]
+    except Exception:
+        return None

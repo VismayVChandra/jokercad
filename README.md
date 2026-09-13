@@ -9,6 +9,12 @@ which runs in a subprocess and gets exported. If the code fails or produces
 invalid geometry, the error is fed back to the model for up to 3 self-repair
 attempts.
 
+Every part that builds is also checked against the request. The server draws
+it from four directions (`backend/app/cad/render.py`, plain numpy + Pillow, no
+GPU needed) and Gemini looks at the picture; if a feature is missing,
+misplaced or the wrong shape, the model is told what to fix and tries again.
+Without Gemini, a text-only check of the code and measurements runs instead.
+
 ## What you can do with a part
 
 - **Edit dimensions by hand**: every size the code exposes shows up as a

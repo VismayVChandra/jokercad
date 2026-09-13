@@ -1,3 +1,4 @@
+import base64
 import os
 
 import requests
@@ -12,6 +13,7 @@ class GeminiProvider(LLMProvider):
     dependencies would add ~130 MB to the deploy bundle."""
 
     name = "gemini"
+    supports_images = True
 
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "")
@@ -32,16 +34,24 @@ class GeminiProvider(LLMProvider):
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    def generate(self, system_prompt: str, messages: list[dict], review: bool = False) -> str:
+    def generate(
+        self, system_prompt: str, messages: list[dict], review: bool = False, images: list[bytes] | None = None
+    ) -> str:
+        """images: PNGs shown with the last message."""
         config = {"temperature": 0.2}
         if self.thinking_level:
             config["thinkingConfig"] = {"thinkingLevel": self.thinking_level}
+        contents = [
+            {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+            for m in messages
+        ]
+        for image in images or []:
+            contents[-1]["parts"].insert(
+                0, {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(image).decode("ascii")}}
+            )
         body = {
             "system_instruction": {"parts": [{"text": system_prompt}]},
-            "contents": [
-                {"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
-                for m in messages
-            ],
+            "contents": contents,
             "generationConfig": config,
         }
         return first_answer(self.models, lambda model, _: self._call(model, body))

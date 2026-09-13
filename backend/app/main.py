@@ -17,9 +17,10 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .cad.executor import extract_code, run_build123d_code
+from .cad.executor import ExecutionResult, extract_code, run_build123d_code
 from .cad.prompts import SYSTEM_PROMPT, build_repair_prompt
-from .cad.review import REVIEW_PROMPT, build_review_request, parse_verdict
+from .cad.render import render_views
+from .cad.review import REVIEW_PROMPT, VISUAL_REVIEW_PROMPT, build_review_request, parse_verdict
 from .llm.router import LLMRouter, RouterExhaustedError
 from .models import GenerateRequest, GenerateResponse, RunRequest
 
@@ -205,21 +206,40 @@ def _review_notes(prompt: str) -> list[str]:
     return [note for wants, _, _, note in _FEATURE_CHECKS if wants(prompt)]
 
 
-def _review_part(requests: list[str], code: str, stats: dict | None, notes: list[str]) -> str | None:
-    """What the reviewer thinks is wrong with a built part, or None if it looks right.
-
-    Returns None as well when reviews are off, there are no measurements, or the
-    reviewer can't be reached: the review is a safety net, never a blocker.
-    """
-    if not REVIEW_PARTS or not stats or "size" not in stats:
+def _part_picture(result: ExecutionResult) -> bytes | None:
+    if not result.mesh:
         return None
     try:
-        request = build_review_request(requests, code, stats, notes)
-        reply = router.review(REVIEW_PROMPT, [{"role": "user", "content": request}])
+        return render_views(result.mesh)
+    except Exception:
+        logger.exception("couldn't draw the part for the review")
+        return None
+
+
+def _review_part(requests: list[str], result: ExecutionResult, notes: list[str]) -> str | None:
+    """What the reviewer thinks is wrong with a built part, or None if it looks right.
+
+    The reviewer looks at a picture of the part when a model that can see is
+    available, which catches misplaced and missing features that measurements
+    alone don't; otherwise it goes by the code and measurements. Returns None
+    as well when reviews are off, there are no measurements, or no reviewer can
+    be reached: the review is a safety net, never a blocker.
+    """
+    stats = result.stats
+    if not REVIEW_PARTS or not stats or "size" not in stats:
+        return None
+    messages = [{"role": "user", "content": build_review_request(requests, result.code, stats, notes)}]
+    picture = _part_picture(result)
+    if picture:
+        try:
+            return parse_verdict(router.review_visual(VISUAL_REVIEW_PROMPT, messages, picture))
+        except RouterExhaustedError as e:
+            logger.warning("review by picture unavailable, checking the code instead: %s", e)
+    try:
+        return parse_verdict(router.review(REVIEW_PROMPT, messages))
     except RouterExhaustedError as e:
         logger.warning("review skipped: %s", e)
         return None
-    return parse_verdict(reply)
 
 
 def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[dict]:
@@ -300,7 +320,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
             if result.ok:
                 logger.info("provider=%s attempt=%d ok (%d bytes)", provider_used, attempt, len(result.glb_bytes))
                 response = _model_response(result.glb_bytes, code, provider_used, attempt, result.stats)
-                problem = _review_part(requests_so_far, code, result.stats, review_notes) if response.ok else None
+                problem = _review_part(requests_so_far, result, review_notes) if response.ok else None
                 if not problem:
                     return response
                 logger.info("provider=%s attempt=%d review flagged: %s", provider_used, attempt, problem[:120])

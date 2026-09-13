@@ -22,6 +22,31 @@ Reply with exactly one line: either `OK`, or `PROBLEM: ` followed by what is wro
 to fix it, in at most two sentences."""
 
 
+VISUAL_REVIEW_PROMPT = """You check a 3D CAD part against what the user asked for. You get \
+their requests, a picture of the built part, measurements of it (units are mm; Z points up) \
+and the build123d code that made it.
+
+The picture shows the part from four directions at one scale: ISO (seen from the front-right,
+above), FRONT (looking toward +Y: X to the right, Z up), TOP (looking down: X to the right,
+Y up) and RIGHT (looking toward -X: Y to the right, Z up). An assembly's separate parts have
+different colours.
+
+Look at the picture first. Flag only clear, specific mismatches with the requests:
+- a requested feature that's missing or clearly the wrong shape (a hole, slot, lip, flange,
+  teeth, groove, arm, finger, support);
+- a feature in the wrong place (a hole off-centre that should be centred, an arm that doesn't
+  meet the pivot it should turn on, parts floating apart, a stand lying flat instead of
+  holding something up);
+- proportions that can't be right for the request.
+Ignore colours, style, small details and reasonable choices the user left open. A flange is
+meant to be wider than the body it's on, and an assembly's parts are separate on purpose,
+joined by pins through aligned holes. Never ask to remove or shrink something the request
+mentions. If unsure, say OK.
+
+Reply with exactly one line: either `OK`, or `PROBLEM: ` followed by what is wrong in the
+picture and how to fix it in the code, in at most two sentences."""
+
+
 def build_review_request(requests: list[str], code: str, stats: dict, notes: list[str] | None = None) -> str:
     """notes are things the server already verified, so the reviewer doesn't second-guess them."""
     sx, sy, sz = stats["size"]

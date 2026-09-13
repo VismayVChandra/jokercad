@@ -98,6 +98,10 @@ class LLMRouter:
 
         self.providers = build(order)
         self.review_providers = build(review_order)
+        # Those that can look at a picture of the part.
+        self.vision_providers = [
+            p for p in dict.fromkeys(self.review_providers + self.providers) if getattr(p, "supports_images", False)
+        ]
 
     def generate(self, system_prompt: str, messages: list[dict]) -> tuple[str, str]:
         """Returns (text, provider_name_used)."""
@@ -108,16 +112,27 @@ class LLMRouter:
         text, _ = self._first_answer(self.review_providers, system_prompt, messages, review=True)
         return text
 
+    def review_visual(self, system_prompt: str, messages: list[dict], image: bytes) -> str:
+        """A check of a built part that also looks at a PNG picture of it."""
+        text, _ = self._first_answer(self.vision_providers, system_prompt, messages, review=True, images=[image])
+        return text
+
     def _first_answer(
-        self, providers: list[LLMProvider], system_prompt: str, messages: list[dict], review: bool
+        self,
+        providers: list[LLMProvider],
+        system_prompt: str,
+        messages: list[dict],
+        review: bool,
+        images: list[bytes] | None = None,
     ) -> tuple[str, str]:
+        extra = {"images": images} if images else {}
         attempts: dict[str, str] = {}
         for provider in providers:
             if not provider.is_configured():
                 attempts[provider.name] = _NOT_CONFIGURED
                 continue
             try:
-                return provider.generate(system_prompt, messages, review=review), provider.name
+                return provider.generate(system_prompt, messages, review=review, **extra), provider.name
             except ProviderError as e:
                 attempts[provider.name] = str(e)
         raise RouterExhaustedError(attempts)
