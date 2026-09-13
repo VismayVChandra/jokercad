@@ -78,6 +78,12 @@ def _child_env() -> dict[str, str]:
     # Python 3.13+ colours tracebacks when FORCE_COLOR is set; the escape
     # codes garble the UI and the error text fed back to the LLM.
     env["PYTHON_COLORS"] = "0"
+    # System libraries OpenCascade links against (libGL and friends) that the
+    # host lacks, copied into backend/syslibs at deploy time by
+    # scripts/vendor_system_libs.sh.
+    syslib_dir = Path(__file__).resolve().parents[2] / "syslibs"
+    if syslib_dir.is_dir():
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(p for p in (str(syslib_dir), env.get("LD_LIBRARY_PATH", "")) if p)
     return env
 
 

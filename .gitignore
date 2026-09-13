@@ -6,3 +6,4 @@ venv/
 backend/generated/*.stl
 backend/generated/*.glb
 backend/generated/*_run.py
+backend/syslibs/

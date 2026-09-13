@@ -65,6 +65,11 @@ functions — so it relies on Vercel's Large Functions beta (up to 5 GB).
 The server keeps no state between requests: the browser sends the conversation
 with each prompt, and the finished model comes back in the response.
 
+Vercel's function runtime lacks the OpenGL/X11 system libraries OpenCascade
+links against. `vercel.json` runs `scripts/vendor_system_libs.sh` as the
+install step, which installs them in the build container and copies them into
+`backend/syslibs`; the CAD subprocess loads them via `LD_LIBRARY_PATH`.
+
 ## Other hosts (Docker)
 
 The `Dockerfile` runs anywhere that runs containers (Google Cloud Run, Render,
