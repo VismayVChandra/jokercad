@@ -9,6 +9,21 @@ which runs in a subprocess and gets exported. If the code fails or produces
 invalid geometry, the error is fed back to the model for up to 3 self-repair
 attempts.
 
+## What you can do with a part
+
+- **Edit dimensions by hand**: every size the code exposes shows up as a
+  parameter; changing one rebuilds the part without an AI call.
+- **Version history**: click any earlier ✓ to go back to it.
+- **Section view** (`S`): cut the part open along X, Y or Z to see bores and
+  wall thicknesses.
+- **Measure** (`M`): click two points for the distance and its X/Y/Z
+  components; clicks near a corner snap to it.
+- **Export**: STEP (exact geometry for Fusion, SolidWorks, FreeCAD), STL for
+  printing, GLB, or a transparent PNG of the view.
+- **Share**: copies a link that carries the part's code, so no database is
+  needed. Whoever opens it sees the code and chooses whether to build it.
+- Camera views `1`–`4`, wireframe `W`, `Esc` to close tools.
+
 ## Free by design
 
 - **Geometry**: `build123d` (OpenCascade) — open source.

@@ -72,6 +72,12 @@ with open(r"{stats_path}", "w", encoding="utf-8") as _stats_file:
 
 from build123d import export_gltf
 export_gltf(result, r"{glb_path}", binary=True)
+{step_export}
+"""
+
+_STEP_EXPORT = """\
+from build123d import export_step
+export_step(result, r"{step_path}")
 """
 
 
@@ -86,6 +92,8 @@ class ExecutionResult:
     retryable: bool = True
     # Bounding box, volume and solid count of the built part, when available.
     stats: dict | None = None
+    # The part as a STEP file, when requested.
+    step_bytes: bytes | None = None
 
 
 def extract_code(llm_text: str) -> str:
@@ -112,7 +120,8 @@ def _child_env() -> dict[str, str]:
     return env
 
 
-def run_build123d_code(code: str) -> ExecutionResult:
+def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
+    """Runs model-written code; with step=True, also exports the part as STEP."""
     for token in _FORBIDDEN_TOKENS:
         if token in code:
             return ExecutionResult(ok=False, code=code, error=f"Generated code contains disallowed token: {token!r}")
@@ -122,11 +131,16 @@ def run_build123d_code(code: str) -> ExecutionResult:
     with tempfile.TemporaryDirectory(prefix="jokercad-") as work_dir:
         glb_path = Path(work_dir) / "part.glb"
         stats_path = Path(work_dir) / "stats.json"
+        step_path = Path(work_dir) / "part.step"
         script_path = Path(work_dir) / "run.py"
         shutil.copyfile(_PARTS_LIBRARY, Path(work_dir) / "jokercad_parts.py")
         script_path.write_text(
             _RUNNER_TEMPLATE.format(
-                user_code=code, glb_path=glb_path, stats_path=stats_path, engine_exit=_ENGINE_UNAVAILABLE_EXIT
+                user_code=code,
+                glb_path=glb_path,
+                stats_path=stats_path,
+                engine_exit=_ENGINE_UNAVAILABLE_EXIT,
+                step_export=_STEP_EXPORT.format(step_path=step_path) if step else "",
             ),
             encoding="utf-8",
         )
@@ -158,4 +172,7 @@ def run_build123d_code(code: str) -> ExecutionResult:
             return ExecutionResult(ok=False, code=code, error="Script ran but did not produce a GLB file.")
 
         stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else None
-        return ExecutionResult(ok=True, code=code, glb_bytes=glb_path.read_bytes(), stats=stats or None)
+        step_bytes = step_path.read_bytes() if step and step_path.exists() else None
+        return ExecutionResult(
+            ok=True, code=code, glb_bytes=glb_path.read_bytes(), stats=stats or None, step_bytes=step_bytes
+        )

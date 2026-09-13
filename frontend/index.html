@@ -28,23 +28,32 @@
 
   <div id="viewerToolbar">
     <div class="view-group" role="group" aria-label="Camera view">
-      <button type="button" class="tool-btn view-btn" data-view="iso" title="Isometric view" disabled>Iso</button>
-      <button type="button" class="tool-btn view-btn" data-view="top" title="Top view" disabled>Top</button>
-      <button type="button" class="tool-btn view-btn" data-view="front" title="Front view" disabled>Front</button>
-      <button type="button" class="tool-btn view-btn" data-view="right" title="Right view" disabled>Right</button>
+      <button type="button" class="tool-btn view-btn model-tool" data-view="iso" title="Isometric view (1)" disabled>Iso</button>
+      <button type="button" class="tool-btn view-btn model-tool" data-view="top" title="Top view (2)" disabled>Top</button>
+      <button type="button" class="tool-btn view-btn model-tool" data-view="front" title="Front view (3)" disabled>Front</button>
+      <button type="button" class="tool-btn view-btn model-tool" data-view="right" title="Right view (4)" disabled>Right</button>
     </div>
     <div class="tool-divider"></div>
-    <button type="button" id="wireframeBtn" class="tool-btn" title="Toggle wireframe">
+    <button type="button" id="sectionBtn" class="tool-btn model-tool" title="Section view: cut the part open (S)" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 12h17"/><path d="m7 17 2-2"/><path d="m11 17 2-2"/><path d="m15 17 2-2"/></svg>
+      <span>Section</span>
+    </button>
+    <button type="button" id="measureBtn" class="tool-btn model-tool" title="Measure between two points (M)" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.4 2.4 0 0 1 0-3.4l2.6-2.6a2.4 2.4 0 0 1 3.4 0Z"/><path d="m14.5 12.5 2-2"/><path d="m11.5 9.5 2-2"/><path d="m8.5 6.5 2-2"/><path d="m17.5 15.5 2-2"/></svg>
+      <span>Measure</span>
+    </button>
+    <button type="button" id="wireframeBtn" class="tool-btn" title="Toggle wireframe (W)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5 12 3l10 5.5-10 5.5L2 8.5Z"/><path d="M2 8.5v7L12 21l10-5.5v-7"/><path d="M12 14v7"/></svg>
     </button>
     <div class="tool-divider"></div>
-    <button type="button" id="downloadGlbBtn" class="tool-btn" title="Download GLB" disabled>
+    <button type="button" id="exportBtn" class="tool-btn model-tool" title="Download the part" aria-haspopup="menu" aria-expanded="false" disabled>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-      <span>GLB</span>
+      <span>Export</span>
+      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
     </button>
-    <button type="button" id="downloadStlBtn" class="tool-btn" title="Download STL" disabled>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-      <span>STL</span>
+    <button type="button" id="shareBtn" class="tool-btn model-tool" title="Copy a link to this part" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <span>Share</span>
     </button>
     <div class="tool-divider"></div>
     <button type="button" id="codeToggleBtn" class="tool-btn" title="View generated code">
@@ -53,8 +62,43 @@
     </button>
   </div>
 
+  <div id="exportMenu" class="popover-menu" role="menu" hidden>
+    <button type="button" class="menu-item" role="menuitem" data-format="step">
+      <span class="menu-format">STEP</span><span class="menu-desc">Editable CAD: Fusion, SolidWorks, FreeCAD</span>
+    </button>
+    <button type="button" class="menu-item" role="menuitem" data-format="stl">
+      <span class="menu-format">STL</span><span class="menu-desc">3D printing and slicers</span>
+    </button>
+    <button type="button" class="menu-item" role="menuitem" data-format="glb">
+      <span class="menu-format">GLB</span><span class="menu-desc">Web, Blender and 3D apps</span>
+    </button>
+    <button type="button" class="menu-item" role="menuitem" data-format="png">
+      <span class="menu-format">PNG</span><span class="menu-desc">Image of the current view</span>
+    </button>
+  </div>
+
+  <div id="sectionBar" hidden>
+    <span class="section-title">Section</span>
+    <div class="seg" role="group" aria-label="Cut across axis">
+      <button type="button" class="seg-btn" data-axis="x">X</button>
+      <button type="button" class="seg-btn" data-axis="y">Y</button>
+      <button type="button" class="seg-btn" data-axis="z">Z</button>
+    </div>
+    <input id="sectionSlider" type="range" min="0" max="1000" value="500" aria-label="Section position" />
+    <span id="sectionValue" class="section-value"></span>
+    <button type="button" id="sectionFlipBtn" class="icon-btn" title="Show the other half">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16V4"/><path d="m3 8 4-4 4 4"/><path d="M17 8v12"/><path d="m21 16-4 4-4-4"/></svg>
+    </button>
+    <button type="button" id="sectionCloseBtn" class="icon-btn" title="Close section view (Esc)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+    </button>
+  </div>
+
+  <div id="measureLabel" hidden></div>
+  <div id="toast" role="status" hidden></div>
+
   <div id="viewerStatus" hidden></div>
-  <p id="viewerHint">Drag to orbit · Scroll to zoom</p>
+  <p id="viewerHint">Drag to orbit · Scroll to zoom · Right-drag to pan</p>
 
   <section id="paramsCard" hidden>
     <div class="params-header">
@@ -70,11 +114,26 @@
     <div id="chatLog">
       <div id="emptyState">
         <h1>What do you want to build?</h1>
-        <p>Describe a part in plain English — shape, dimensions, holes. Then fine-tune every dimension by hand.</p>
+        <p>Describe a part in plain English: shape, dimensions, holes. Then tweak any dimension by hand, cut it open, measure it, and export real CAD.</p>
         <div class="chips">
-          <button type="button" class="chip">a 40×20×10mm box with a 4mm hole through the center</button>
-          <button type="button" class="chip">a 30mm diameter, 8mm thick knob with a 6mm hexagonal hole through the center</button>
-          <button type="button" class="chip">an L-bracket with 50mm arms, 5mm thick, with a 6mm mounting hole in each arm</button>
+          <button type="button" class="chip" data-prompt="a spur gear with module 2, 24 teeth, 10mm face width and an 8mm bore">
+            <span class="chip-title">Spur gear</span><span class="chip-desc">24 teeth · module 2</span>
+          </button>
+          <button type="button" class="chip" data-prompt="a flanged bearing housing: 40mm body diameter, 30mm tall, a 22mm bore all the way through, and an 8mm thick flange with four 6mm mounting holes">
+            <span class="chip-title">Bearing housing</span><span class="chip-desc">Flange · 4 bolt holes</span>
+          </button>
+          <button type="button" class="chip" data-prompt="a V-groove pulley, 60mm outer diameter, 16mm wide, with an 8mm bore">
+            <span class="chip-title">V-groove pulley</span><span class="chip-desc">Ø60 mm · 8 mm bore</span>
+          </button>
+          <button type="button" class="chip" data-prompt="a phone stand, 70mm wide, with a back support leaning at 65 degrees and a front lip to hold the phone">
+            <span class="chip-title">Phone stand</span><span class="chip-desc">65° back · front lip</span>
+          </button>
+          <button type="button" class="chip" data-prompt="an L-bracket with 50mm arms, 5mm thick, with a 6mm mounting hole in each arm">
+            <span class="chip-title">L-bracket</span><span class="chip-desc">50 mm arms · 2 holes</span>
+          </button>
+          <button type="button" class="chip" data-prompt="a 30mm diameter, 8mm thick knob with a 6mm hexagonal hole through the center">
+            <span class="chip-title">Hex knob</span><span class="chip-desc">Ø30 mm · hex socket</span>
+          </button>
         </div>
       </div>
     </div>

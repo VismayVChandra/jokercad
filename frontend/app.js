@@ -30,9 +30,22 @@ const codeToggleBtn = document.getElementById("codeToggleBtn");
 const closeCodeBtn = document.getElementById("closeCodeBtn");
 const copyCodeBtn = document.getElementById("copyCodeBtn");
 const wireframeBtn = document.getElementById("wireframeBtn");
-const downloadGlbBtn = document.getElementById("downloadGlbBtn");
-const downloadStlBtn = document.getElementById("downloadStlBtn");
+const sectionBtn = document.getElementById("sectionBtn");
+const measureBtn = document.getElementById("measureBtn");
+const exportBtn = document.getElementById("exportBtn");
+const exportMenu = document.getElementById("exportMenu");
+const shareBtn = document.getElementById("shareBtn");
+const sectionBar = document.getElementById("sectionBar");
+const sectionSlider = document.getElementById("sectionSlider");
+const sectionValue = document.getElementById("sectionValue");
+const sectionFlipBtn = document.getElementById("sectionFlipBtn");
+const sectionCloseBtn = document.getElementById("sectionCloseBtn");
+const sectionAxisButtons = [...sectionBar.querySelectorAll(".seg-btn")];
+const measureLabel = document.getElementById("measureLabel");
+const toast = document.getElementById("toast");
 const viewButtons = [...document.querySelectorAll(".view-btn")];
+// Buttons that only make sense once there's a part.
+const modelTools = [...document.querySelectorAll(".model-tool")];
 const viewerStatus = document.getElementById("viewerStatus");
 const paramsCard = document.getElementById("paramsCard");
 const paramsList = document.getElementById("paramsList");
@@ -43,6 +56,17 @@ const lockError = document.getElementById("lockError");
 const lockBtn = document.getElementById("lockBtn");
 
 const narrowScreen = window.matchMedia("(max-width: 900px)");
+
+// Viewer directions of the part's own X, Y and Z axes: the viewer is Y-up, so
+// build123d's Z (up) is the viewer's +Y and its Y is the viewer's -Z.
+const PART_AXES = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 0, -1),
+  z: new THREE.Vector3(0, 1, 0),
+};
+const section = { on: false, axis: "x", fraction: 0.5, flipped: false };
+const sectionPlane = new THREE.Plane();
+const ruler = { on: false, points: [] };
 
 /* ---------------- scene ---------------- */
 
@@ -56,6 +80,8 @@ camera.position.set(90, 75, 90);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Lets the section view cut the part open.
+renderer.localClippingEnabled = true;
 viewerEl.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -90,11 +116,18 @@ const modelMaterial = new THREE.MeshStandardMaterial({
 
 const edgeMaterial = new THREE.LineBasicMaterial({ color: 0xa9b2ff, transparent: true, opacity: 0.75 });
 
+// Inside a cut-open part the camera sees the walls' back faces; drawing them
+// flat in their own colour makes the cut read as solid material.
+const capMaterial = new THREE.MeshBasicMaterial({ color: 0xff9e7a, side: THREE.BackSide });
+
 let currentModel = null;
 let exportSource = null;
 let edgeGroup = null;
+let capGroup = null;
 let wireframeOn = false;
 let partInfoText = "";
+// The part's bounding box in its own (build123d) coordinates, in mm.
+let partBox = null;
 const loader = new GLTFLoader();
 
 /* ---------------- camera ---------------- */
@@ -167,6 +200,7 @@ function animate() {
   }
 
   controls.update();
+  positionMeasureLabel();
   renderer.render(scene, camera);
 }
 animate();
@@ -210,6 +244,7 @@ function applyWireframeState() {
   if (!currentModel) return;
   currentModel.visible = !wireframeOn;
   if (edgeGroup) edgeGroup.visible = true;
+  if (capGroup) capGroup.visible = section.on && !wireframeOn;
   wireframeBtn.classList.toggle("active", wireframeOn);
 }
 
@@ -225,7 +260,8 @@ function exportRoot() {
 }
 
 function measure(root) {
-  const size = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
   let volume = 0;
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
@@ -243,13 +279,12 @@ function measure(root) {
       volume += a.dot(b.cross(c)) / 6;
     }
   });
-  return { size, volume: Math.abs(volume) };
+  return { box, size, volume: Math.abs(volume) };
 }
 
 // Volume comes from the display mesh, which slightly undercuts curved
 // surfaces (~2% on a cylinder), hence the "≈".
-function describePart() {
-  const { size, volume } = measure(exportRoot());
+function describePart({ size, volume }) {
   const dims = [size.x, size.y, size.z].map((v) => v.toFixed(1)).join(" × ");
   const vol = volume >= 1000 ? `${(volume / 1000).toFixed(2)} cm³` : `${volume.toFixed(0)} mm³`;
   return `${dims} mm · ≈ ${vol}`;
@@ -258,6 +293,7 @@ function describePart() {
 function showModel(gltf, reframe) {
   if (currentModel) scene.remove(currentModel);
   if (edgeGroup) scene.remove(edgeGroup);
+  if (capGroup) scene.remove(capGroup);
 
   // Untouched copy for export and measuring, taken before the viewer rescales and moves it.
   exportSource = gltf.scene.clone();
@@ -276,10 +312,17 @@ function showModel(gltf, reframe) {
   currentModel.updateMatrixWorld(true);
   edgeGroup = buildEdges(currentModel);
   scene.add(edgeGroup);
+  capGroup = buildCaps(currentModel);
+  scene.add(capGroup);
   applyWireframeState();
 
-  partInfoText = describePart();
-  if (!busy) showViewerStatus(partInfoText);
+  const part = measure(exportRoot());
+  partBox = part.box;
+  partInfoText = describePart(part);
+  // Measured points belong to the previous shape.
+  clearRuler();
+  if (section.on) updateSectionPlane();
+  if (!busy) showViewerStatus(idleStatusText());
 }
 
 function loadModel(glbBytes, reframe) {
@@ -412,9 +455,7 @@ function showVersion(index, reframe) {
   const version = versions[index];
   currentCode = version.code;
   codeView.textContent = version.code;
-  downloadGlbBtn.disabled = false;
-  downloadStlBtn.disabled = false;
-  viewButtons.forEach((btn) => (btn.disabled = false));
+  modelTools.forEach((btn) => (btn.disabled = false));
   renderParams(version.code);
   loadModel(version.glbBytes, reframe);
   if (narrowScreen.matches) setPanelCollapsed(true);
@@ -427,7 +468,7 @@ function setBusy(on, label = "") {
   paramsCard.classList.toggle("is-busy", on);
   paramsList.querySelectorAll("input").forEach((field) => (field.disabled = on));
   if (on) showViewerStatus(label, { loading: true });
-  else if (partInfoText) showViewerStatus(partInfoText);
+  else if (partInfoText) showViewerStatus(idleStatusText());
   else viewerStatus.hidden = true;
 }
 
@@ -601,7 +642,7 @@ async function initAccess() {
 
 // Returns { data } on an HTTP 200, otherwise reports the problem on the
 // pending chat entry and returns {} (plus unauthorized: true for a 401).
-async function callApi(path, payload, pending) {
+async function callApi(path, payload, pending, { asBlob = false } = {}) {
   // Generous ceiling: worst case is MAX_REPAIR_ATTEMPTS retries, each paying
   // both an LLM call and a build123d execution (which can itself take ~2min
   // on a machine's very first run while the OS scans the native OCP DLLs).
@@ -625,7 +666,7 @@ async function callApi(path, payload, pending) {
       setEntryError(pending, typeof body.detail === "string" ? body.detail : `Server returned ${res.status}`);
       return {};
     }
-    return { data: await res.json() };
+    return { data: asBlob ? await res.blob() : await res.json() };
   } catch (err) {
     setEntryError(
       pending,
@@ -655,7 +696,7 @@ input.addEventListener("keydown", (e) => {
 
 document.querySelectorAll(".chip").forEach((chip) => {
   chip.addEventListener("click", () => {
-    input.value = chip.textContent.trim();
+    input.value = chip.dataset.prompt;
     autoResize();
     input.focus();
   });
@@ -703,46 +744,384 @@ form.addEventListener("submit", async (e) => {
   if (lockScreen.hidden) input.focus();
 });
 
-/* ---------------- toolbar ---------------- */
+/* ---------------- section view ---------------- */
 
-viewButtons.forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
+function buildCaps(model) {
+  const group = new THREE.Group();
+  model.traverse((child) => {
+    if (!child.isMesh) return;
+    const cap = new THREE.Mesh(child.geometry, capMaterial);
+    child.getWorldPosition(cap.position);
+    child.getWorldQuaternion(cap.quaternion);
+    child.getWorldScale(cap.scale);
+    group.add(cap);
+  });
+  return group;
+}
 
-wireframeBtn.addEventListener("click", () => {
-  wireframeOn = !wireframeOn;
+function updateSectionPlane() {
+  if (!currentModel) return;
+  const axis = PART_AXES[section.axis];
+  const box = new THREE.Box3().setFromObject(currentModel);
+  const ends = [box.min.dot(axis), box.max.dot(axis)];
+  const lo = Math.min(...ends);
+  const hi = Math.max(...ends);
+  const cut = lo + (hi - lo) * section.fraction;
+  // three.js hides whatever lies on the plane's negative side, so this keeps
+  // the half below the cut (above it when flipped).
+  if (section.flipped) sectionPlane.set(axis, -cut);
+  else sectionPlane.set(axis.clone().negate(), cut);
+  // Shown in the part's own coordinates, the ones its code uses.
+  const partMin = partBox ? partBox.min[section.axis] : lo;
+  sectionValue.textContent = `${section.axis.toUpperCase()} = ${(partMin + cut - lo).toFixed(1)} mm`;
+  sectionAxisButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.axis === section.axis));
+}
+
+function setSection(on) {
+  section.on = on && Boolean(currentModel);
+  const planes = section.on ? [sectionPlane] : null;
+  for (const material of [modelMaterial, edgeMaterial, capMaterial]) {
+    material.clippingPlanes = planes;
+    material.needsUpdate = true;
+  }
+  sectionBar.hidden = !section.on;
+  sectionBtn.classList.toggle("active", section.on);
+  document.body.classList.toggle("section-on", section.on);
+  if (section.on) updateSectionPlane();
   applyWireframeState();
+}
+
+sectionBtn.addEventListener("click", () => setSection(!section.on));
+sectionCloseBtn.addEventListener("click", () => setSection(false));
+
+sectionFlipBtn.addEventListener("click", () => {
+  section.flipped = !section.flipped;
+  updateSectionPlane();
 });
 
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
+sectionAxisButtons.forEach((btn) =>
+  btn.addEventListener("click", () => {
+    section.axis = btn.dataset.axis;
+    updateSectionPlane();
+  })
+);
+
+sectionSlider.addEventListener("input", () => {
+  section.fraction = Number(sectionSlider.value) / 1000;
+  updateSectionPlane();
+});
+
+/* ---------------- measuring ---------------- */
+
+const raycaster = new THREE.Raycaster();
+const rulerGroup = new THREE.Group();
+scene.add(rulerGroup);
+// Drawn on top of everything, so the points stay visible through the part.
+const rulerPointMaterial = new THREE.MeshBasicMaterial({ color: 0xffd166, depthTest: false, transparent: true });
+const rulerLineMaterial = new THREE.LineBasicMaterial({ color: 0xffd166, depthTest: false, transparent: true });
+const rulerPointGeometry = new THREE.SphereGeometry(1, 16, 12);
+// A click this close (in pixels) to a mesh corner snaps to it, so corner-to-corner
+// measurements come out exact.
+const SNAP_PIXELS = 10;
+
+function idleStatusText() {
+  return ruler.on ? "Click two points on the part to measure" : partInfoText;
+}
+
+// The canvas fills the window, so window coordinates are canvas coordinates.
+function toScreen(point) {
+  const p = point.clone().project(camera);
+  return { x: ((p.x + 1) / 2) * window.innerWidth, y: ((1 - p.y) / 2) * window.innerHeight };
+}
+
+function pickPoint(event) {
+  const pointer = new THREE.Vector2(
+    (event.clientX / window.innerWidth) * 2 - 1,
+    -(event.clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(pointer, camera);
+  // The raycaster ignores the section plane, so skip hits on the cut-away half.
+  // A cut face on screen is really the inside of the far wall (the caps' back
+  // faces); the point wanted there is where the ray meets the cut itself.
+  const targets = section.on && capGroup ? [currentModel, capGroup] : [currentModel];
+  const hit = raycaster
+    .intersectObjects(targets, true)
+    .find((h) => !section.on || sectionPlane.distanceToPoint(h.point) >= 0);
+  if (!hit) return null;
+  if (hit.object.material === capMaterial) return raycaster.ray.intersectPlane(sectionPlane, new THREE.Vector3());
+
+  const positions = hit.object.geometry.getAttribute("position");
+  let best = hit.point.clone();
+  let bestDistance = SNAP_PIXELS;
+  for (const i of [hit.face.a, hit.face.b, hit.face.c]) {
+    const corner = new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(hit.object.matrixWorld);
+    const s = toScreen(corner);
+    const distance = Math.hypot(s.x - event.clientX, s.y - event.clientY);
+    if (distance < bestDistance) {
+      best = corner;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function drawRuler() {
+  rulerGroup.children.forEach((child) => child.isLine && child.geometry.dispose());
+  rulerGroup.clear();
+  const pointSize = (lastFrame ? lastFrame.dist / 2.1 : 50) * 0.012;
+  for (const point of ruler.points) {
+    const dot = new THREE.Mesh(rulerPointGeometry, rulerPointMaterial);
+    dot.position.copy(point);
+    dot.scale.setScalar(pointSize);
+    dot.renderOrder = 10;
+    rulerGroup.add(dot);
+  }
+
+  measureLabel.hidden = ruler.points.length < 2;
+  if (ruler.points.length < 2) return;
+
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(ruler.points), rulerLineMaterial);
+  line.renderOrder = 10;
+  rulerGroup.add(line);
+  const d = ruler.points[1].clone().sub(ruler.points[0]);
+  const along = (axis) => Math.abs(d.dot(PART_AXES[axis])).toFixed(1);
+  measureLabel.innerHTML = `<strong>${d.length().toFixed(2)} mm</strong><span>ΔX ${along("x")} · ΔY ${along("y")} · ΔZ ${along("z")}</span>`;
+  positionMeasureLabel();
+}
+
+function positionMeasureLabel() {
+  if (ruler.points.length < 2) return;
+  const mid = toScreen(ruler.points[0].clone().lerp(ruler.points[1], 0.5));
+  measureLabel.style.transform = `translate(${mid.x}px, ${mid.y}px) translate(-50%, calc(-100% - 12px))`;
+}
+
+function clearRuler() {
+  ruler.points = [];
+  drawRuler();
+}
+
+function setMeasuring(on) {
+  ruler.on = on && Boolean(currentModel);
+  measureBtn.classList.toggle("active", ruler.on);
+  renderer.domElement.style.cursor = ruler.on ? "crosshair" : "";
+  if (!ruler.on) clearRuler();
+  if (!busy && partInfoText) showViewerStatus(idleStatusText());
+}
+
+measureBtn.addEventListener("click", () => setMeasuring(!ruler.on));
+
+// A click places a point; the end of an orbit drag doesn't.
+let pointerDownAt = null;
+renderer.domElement.addEventListener("pointerdown", (e) => (pointerDownAt = { x: e.clientX, y: e.clientY }));
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!ruler.on || !pointerDownAt || e.button !== 0) return;
+  if (Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5) return;
+  const point = pickPoint(e);
+  if (!point) return;
+  if (ruler.points.length === 2) ruler.points = [];
+  ruler.points.push(point);
+  drawRuler();
+});
+
+/* ---------------- export ---------------- */
+
+function downloadHref(href, filename) {
   const a = document.createElement("a");
-  a.href = url;
+  a.href = href;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  downloadHref(url, filename);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-downloadGlbBtn.addEventListener("click", () => {
-  const version = versions[activeVersion];
-  if (version) downloadBlob(new Blob([version.glbBytes], { type: "model/gltf-binary" }), "jokercad-part.glb");
+// STEP keeps the exact geometry (true circles, faces other CAD tools can edit),
+// so it's made on the server from the part's code rather than from the mesh.
+async function exportStep() {
+  if (busy) return;
+  const label = `v${activeVersion + 1}`;
+  const pending = addThinkingEntry(`Exporting ${label} as STEP…`);
+  setBusy(true, "Exporting STEP…");
+  const { data } = await callApi("/api/export/step", { code: currentCode }, pending, { asBlob: true });
+  if (data) {
+    downloadBlob(data, "jokercad-part.step");
+    setEntrySuccess(pending, `Exported ${label} as STEP`);
+  }
+  setBusy(false);
+}
+
+// A transparent image of the current view, without the floor grid or measurements.
+function exportPng() {
+  grid.visible = false;
+  rulerGroup.visible = false;
+  renderer.render(scene, camera);
+  // Read straight after rendering, before the browser clears the canvas.
+  const url = renderer.domElement.toDataURL("image/png");
+  grid.visible = true;
+  rulerGroup.visible = true;
+  downloadHref(url, "jokercad-part.png");
+}
+
+const EXPORTERS = {
+  step: exportStep,
+  stl: () => {
+    const stl = new STLExporter().parse(exportRoot(), { binary: true });
+    downloadBlob(new Blob([stl], { type: "model/stl" }), "jokercad-part.stl");
+  },
+  glb: () => {
+    const version = versions[activeVersion];
+    if (version) downloadBlob(new Blob([version.glbBytes], { type: "model/gltf-binary" }), "jokercad-part.glb");
+  },
+  png: exportPng,
+};
+
+function setExportMenu(open) {
+  exportMenu.hidden = !open;
+  exportBtn.setAttribute("aria-expanded", String(open));
+  exportBtn.classList.toggle("active", open);
+  if (!open) return;
+  // Positioned by hand: inside the toolbar it would be clipped when the
+  // toolbar scrolls sideways on phones.
+  const r = exportBtn.getBoundingClientRect();
+  const width = exportMenu.offsetWidth;
+  exportMenu.style.top = `${r.bottom + 8}px`;
+  exportMenu.style.left = `${Math.max(12, Math.min(r.right - width, window.innerWidth - width - 12))}px`;
+  exportMenu.querySelector(".menu-item").focus();
+}
+
+exportBtn.addEventListener("click", () => setExportMenu(exportMenu.hidden));
+
+document.addEventListener("pointerdown", (e) => {
+  if (!exportMenu.hidden && !exportMenu.contains(e.target) && !exportBtn.contains(e.target)) setExportMenu(false);
 });
 
-downloadStlBtn.addEventListener("click", () => {
-  if (!exportSource) return;
-  const stl = new STLExporter().parse(exportRoot(), { binary: true });
-  downloadBlob(new Blob([stl], { type: "model/stl" }), "jokercad-part.stl");
+window.addEventListener("resize", () => setExportMenu(false));
+
+exportMenu.querySelectorAll(".menu-item").forEach((item) =>
+  item.addEventListener("click", () => {
+    setExportMenu(false);
+    if (exportSource) EXPORTERS[item.dataset.format]();
+  })
+);
+
+/* ---------------- share links ---------------- */
+
+// A share link carries the part's code, compressed, in the URL fragment,
+// which browsers never send to a server, so sharing needs no storage.
+const SHARE_PREFIX = "#part=";
+
+async function packCode(code) {
+  const stream = new Blob([code]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let binary = "";
+  bytes.forEach((b) => (binary += String.fromCharCode(b)));
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function unpackCode(packed) {
+  const bytes = base64ToBytes(packed.replace(/-/g, "+").replace(/_/g, "/"));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Response(stream).text();
+}
+
+let toastTimer = null;
+function showToast(text) {
+  toast.textContent = text;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toast.hidden = true), 2800);
+}
+
+shareBtn.addEventListener("click", async () => {
+  if (!currentCode) return;
+  const url = `${location.origin}${location.pathname}${SHARE_PREFIX}${await packCode(currentCode)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("Link copied. It opens this exact part.");
+  } catch {
+    window.prompt("Copy this link to share the part:", url);
+  }
 });
 
-codeToggleBtn.addEventListener("click", () => {
-  const open = codeDrawer.classList.toggle("is-open");
+async function buildSharedPart(code) {
+  if (busy) return false;
+  addUserEntry("Open the shared part");
+  const pending = addThinkingEntry("Building the shared part…");
+  setBusy(true, "Building part…");
+  const { data } = await callApi("/api/run", { code }, pending);
+  const ok = Boolean(data && data.ok);
+  if (ok) {
+    // Follow-up prompts then modify the shared part.
+    conversation.push({ role: "user", content: "Start from this part." }, { role: "assistant", content: fence(data.code) });
+    setEntrySuccess(pending, "Opened the shared part");
+    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true);
+  } else if (data) {
+    setEntryError(pending, `Couldn't build the shared part: ${data.error}`);
+  }
+  setBusy(false);
+  return ok;
+}
+
+// Building a shared part runs its code on the server, and a link can come from
+// anyone, so it only happens when the person opening it asks, after they've
+// had the chance to read the code.
+async function offerSharedPart() {
+  if (!location.hash.startsWith(SHARE_PREFIX)) return;
+  const packed = location.hash.slice(SHARE_PREFIX.length);
+  history.replaceState(null, "", location.pathname + location.search);
+
+  let code;
+  try {
+    code = await unpackCode(packed);
+  } catch {
+    const el = document.createElement("div");
+    chatLog.appendChild(el);
+    setEntryError(el, "That share link is incomplete or damaged, so the part can't be opened.");
+    return;
+  }
+
+  if (emptyState) emptyState.remove();
+  codeView.textContent = code;
+  const card = document.createElement("div");
+  card.className = "entry entry-share";
+  card.innerHTML =
+    '<div class="share-title">Someone shared a part with you</div>' +
+    "<p>Building it runs the part's code on the server. You can read the code first.</p>" +
+    '<div class="share-actions"><button type="button" class="text-btn">View code</button>' +
+    '<button type="button" class="primary-btn">Build it</button></div>';
+  chatLog.appendChild(card);
+  const [viewBtn, buildBtn] = card.querySelectorAll("button");
+  viewBtn.addEventListener("click", () => setCodeDrawer(true));
+  buildBtn.addEventListener("click", async () => {
+    buildBtn.disabled = true;
+    if (await buildSharedPart(code)) card.remove();
+    else buildBtn.disabled = false;
+  });
+}
+
+/* ---------------- toolbar ---------------- */
+
+viewButtons.forEach((btn) => btn.addEventListener("click", () => setView(btn.dataset.view)));
+
+function toggleWireframe() {
+  wireframeOn = !wireframeOn;
+  applyWireframeState();
+}
+
+wireframeBtn.addEventListener("click", toggleWireframe);
+
+function setCodeDrawer(open) {
+  codeDrawer.classList.toggle("is-open", open);
   codeToggleBtn.classList.toggle("active", open);
-});
+}
 
-closeCodeBtn.addEventListener("click", () => {
-  codeDrawer.classList.remove("is-open");
-  codeToggleBtn.classList.remove("active");
-});
+codeToggleBtn.addEventListener("click", () => setCodeDrawer(!codeDrawer.classList.contains("is-open")));
+closeCodeBtn.addEventListener("click", () => setCodeDrawer(false));
 
 copyCodeBtn.addEventListener("click", async () => {
   if (!codeView.textContent) return;
@@ -751,12 +1130,30 @@ copyCodeBtn.addEventListener("click", async () => {
   setTimeout(() => (copyCodeBtn.textContent = "Copy"), 1400);
 });
 
+const VIEW_KEYS = { 1: "iso", 2: "top", 3: "front", 4: "right" };
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && codeDrawer.classList.contains("is-open")) {
-    codeDrawer.classList.remove("is-open");
-    codeToggleBtn.classList.remove("active");
+  if (e.key === "Escape") {
+    // Closes the most recently opened thing first.
+    if (!exportMenu.hidden) setExportMenu(false);
+    else if (codeDrawer.classList.contains("is-open")) setCodeDrawer(false);
+    else if (ruler.on) setMeasuring(false);
+    else if (section.on) setSection(false);
+    return;
   }
+  const typing = e.target.matches("textarea, input:not([type=range])");
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || !currentModel || !lockScreen.hidden) return;
+  const key = e.key.toLowerCase();
+  if (VIEW_KEYS[key]) setView(VIEW_KEYS[key]);
+  else if (key === "w") toggleWireframe();
+  else if (key === "s") setSection(!section.on);
+  else if (key === "m") setMeasuring(!ruler.on);
+  else return;
+  e.preventDefault();
 });
 
 input.focus();
 initAccess();
+offerSharedPart();
+// A share link pasted into a tab that's already open only changes the hash.
+window.addEventListener("hashchange", offerSharedPart);

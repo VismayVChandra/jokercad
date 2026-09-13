@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -62,6 +62,8 @@ INPUT_TOKEN_BUDGET = int(os.getenv("INPUT_TOKEN_BUDGET", "5000"))
 MAX_ERROR_CHARS = 1500
 # base64 adds a third on top of this, and Vercel caps function responses at 4.5 MB.
 MAX_GLB_BYTES = 3_000_000
+# STEP goes back as the raw file, so it can use nearly all of the 4.5 MB.
+MAX_STEP_BYTES = 4_000_000
 # After a part builds, a second model checks it against the request.
 REVIEW_PARTS = os.getenv("REVIEW_PARTS", "1") != "0"
 
@@ -321,6 +323,27 @@ def run(req: RunRequest, request: Request) -> GenerateResponse:
     if result.ok:
         return _model_response(result.glb_bytes, req.code, None, 0)
     return GenerateResponse(ok=False, code=req.code, error=result.error)
+
+
+@app.post("/api/export/step")
+def export_step(req: RunRequest, request: Request) -> Response:
+    """Rebuilds the code and returns the part as a STEP file, the format other CAD tools import."""
+    _require_password(request)
+    _consume_generation_slot()
+
+    result = run_build123d_code(req.code, step=True)
+    if not result.ok:
+        last_line = (result.error or "").strip().splitlines()[-1:] or ["unknown error"]
+        raise HTTPException(status_code=422, detail=f"Couldn't rebuild the part for export: {last_line[0]}")
+    if not result.step_bytes:
+        raise HTTPException(status_code=500, detail="The STEP export didn't produce a file.")
+    if len(result.step_bytes) > MAX_STEP_BYTES:
+        raise HTTPException(status_code=413, detail="The part is too detailed to send as STEP (over 4 MB).")
+    return Response(
+        content=result.step_bytes,
+        media_type="model/step",
+        headers={"Content-Disposition": 'attachment; filename="jokercad-part.step"'},
+    )
 
 
 @app.post("/api/auth")
