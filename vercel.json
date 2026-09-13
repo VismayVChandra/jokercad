@@ -1,4 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "bash scripts/vendor_system_libs.sh"
+  "buildCommand": "bash scripts/vendor_system_libs.sh"
 }

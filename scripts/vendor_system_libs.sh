@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Vercel install step. OpenCascade (via build123d) links against libGL and a
+# Vercel build step. OpenCascade (via build123d) links against libGL and a
 # few X11 libraries that the Vercel function runtime doesn't have. Install them
 # in the build container (Amazon Linux 2023, the same base as the runtime) and
 # copy them, plus their dependencies, into backend/syslibs, which ships with

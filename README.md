@@ -67,8 +67,11 @@ with each prompt, and the finished model comes back in the response.
 
 Vercel's function runtime lacks the OpenGL/X11 system libraries OpenCascade
 links against. `vercel.json` runs `scripts/vendor_system_libs.sh` as the
-install step, which installs them in the build container and copies them into
-`backend/syslibs`; the CAD subprocess loads them via `LD_LIBRARY_PATH`.
+build command (after Vercel installs the Python packages), which installs them
+in the build container and copies them into `backend/syslibs`; the CAD
+subprocess loads them via `LD_LIBRARY_PATH`. Don't set a custom install
+command: it replaces Vercel's own Python package install and the app crashes
+on startup.
 
 ## Other hosts (Docker)
 
