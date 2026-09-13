@@ -19,6 +19,11 @@
     <div class="brand">
       <span class="brand-mark">◆</span>
       <span class="brand-name">jokercad</span>
+      <button type="button" id="projectBtn" class="project-btn" title="Switch or manage projects" aria-haspopup="menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+        <span id="projectName">Project</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
     </div>
     <div id="providerBadge" class="provider-badge" hidden>
       <span class="provider-dot"></span>
@@ -77,6 +82,18 @@
     </button>
   </div>
 
+  <div id="projectMenu" class="popover-menu project-menu" role="menu" hidden>
+    <div class="menu-label">Projects</div>
+    <div id="projectList"></div>
+    <div class="menu-sep"></div>
+    <button type="button" class="menu-action" data-action="new">New project</button>
+    <button type="button" class="menu-action" data-action="rename">Rename this project</button>
+    <button type="button" class="menu-action" data-action="export">Export project file</button>
+    <button type="button" class="menu-action" data-action="import">Import project file</button>
+    <button type="button" class="menu-action danger" data-action="delete">Delete this project</button>
+  </div>
+  <input type="file" id="importInput" accept=".json,application/json" hidden />
+
   <div id="sectionBar" hidden>
     <span class="section-title">Section</span>
     <div class="seg" role="group" aria-label="Cut across axis">
@@ -120,6 +137,7 @@
 
   <aside id="panel">
     <button type="button" id="panelHandle" class="panel-handle" aria-label="Show or hide the conversation" aria-expanded="true"><span></span></button>
+    <div id="partTabs" class="part-tabs" aria-label="Parts in this project"></div>
     <div id="chatLog">
       <div id="emptyState">
         <h1>What do you want to build?</h1>
@@ -157,6 +175,45 @@
       </div>
       <div class="input-hint">⌘/Ctrl + Enter to generate · click a ✓ to restore that version</div>
     </form>
+
+    <div id="assemblyPanel" hidden>
+      <div>
+        <div class="asm-heading">Project parts <span class="asm-sub">insert as many copies as you need</span></div>
+        <div id="asmPartList" class="asm-list"></div>
+      </div>
+      <div>
+        <div class="asm-heading">In the assembly</div>
+        <div id="asmInstanceList" class="asm-list"></div>
+      </div>
+      <div id="asmSelection" hidden>
+        <div class="asm-heading">Selected <span id="asmSelName" class="asm-sub"></span></div>
+        <div class="seg" role="group" aria-label="Handle">
+          <button type="button" class="seg-btn wide" data-mode="translate" title="Move (G)">Move</button>
+          <button type="button" class="seg-btn wide" data-mode="rotate" title="Rotate (R)">Rotate</button>
+        </div>
+        <div class="asm-fields">
+          <label>X<input type="number" step="any" data-axis="x" aria-label="X position (mm)" /></label>
+          <label>Y<input type="number" step="any" data-axis="y" aria-label="Y position (mm)" /></label>
+          <label>Z<input type="number" step="any" data-axis="z" aria-label="Z position (mm)" /></label>
+        </div>
+        <div class="asm-actions">
+          <span class="asm-label">Turn 90°</span>
+          <button type="button" class="text-btn" data-turn="x">X</button>
+          <button type="button" class="text-btn" data-turn="y">Y</button>
+          <button type="button" class="text-btn" data-turn="z">Z</button>
+          <button type="button" class="text-btn" data-action="floor">Drop to floor</button>
+        </div>
+        <div class="asm-actions">
+          <button type="button" class="text-btn" data-action="duplicate">Duplicate</button>
+          <button type="button" class="text-btn danger" data-action="remove">Remove</button>
+        </div>
+      </div>
+      <div class="asm-footer">
+        <button type="button" id="mateBtn" class="primary-btn">Snap faces together</button>
+        <button type="button" id="undoMoveBtn" class="text-btn" disabled title="Undo the last move (Ctrl+Z)">Undo move</button>
+      </div>
+      <p class="asm-hint">Click a part to select it, then drag its arrows or rings, or type a position. To snap, click a flat face on the part to move, then the face it should sit against. Snapping a pin's end to the ring around a hole centres it over the hole.</p>
+    </div>
   </aside>
 
   <div id="codeDrawer">

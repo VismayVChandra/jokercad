@@ -24,6 +24,21 @@ attempts.
   needed. Whoever opens it sees the code and chooses whether to build it.
 - Camera views `1`–`4`, wireframe `W`, `Esc` to close tools.
 
+## Projects and assemblies
+
+- **Projects** (the folder button at the top): each project holds several
+  parts, each with its own chat and version history. Projects are saved in
+  the browser (IndexedDB), so they need no account or server; **Export
+  project file** writes a `.jokercad.json` backup that **Import** reads back,
+  on any browser.
+- **Assembly** tab: insert copies of the project's parts, then move and rotate
+  them with the on-screen handles (`G` move, `R` rotate), by typing a position,
+  or with 90° turns. **Snap faces together** turns a part so a face you click
+  sits flush against a face on another part, centre to centre, so a pin's end
+  snapped to the ring around a hole lands centred over it. `Ctrl+Z` undoes
+  moves. The assembly always uses each part's current version, and exports as
+  STL, GLB or PNG.
+
 ## Free by design
 
 - **Geometry**: `build123d` (OpenCascade) — open source.

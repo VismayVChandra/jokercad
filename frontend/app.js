@@ -3,6 +3,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { STLExporter } from "three/addons/exporters/STLExporter.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 
 const API_BASE = "";
 // Matches the server's MAX_HISTORY_MESSAGES; it would drop older turns anyway.
@@ -56,6 +58,21 @@ const lockForm = document.getElementById("lockForm");
 const lockInput = document.getElementById("lockInput");
 const lockError = document.getElementById("lockError");
 const lockBtn = document.getElementById("lockBtn");
+const partTabs = document.getElementById("partTabs");
+const projectBtn = document.getElementById("projectBtn");
+const projectNameEl = document.getElementById("projectName");
+const projectMenu = document.getElementById("projectMenu");
+const projectList = document.getElementById("projectList");
+const importInput = document.getElementById("importInput");
+const assemblyPanel = document.getElementById("assemblyPanel");
+const asmPartList = document.getElementById("asmPartList");
+const asmInstanceList = document.getElementById("asmInstanceList");
+const asmSelection = document.getElementById("asmSelection");
+const asmSelName = document.getElementById("asmSelName");
+const asmFields = [...asmSelection.querySelectorAll("input[data-axis]")];
+const asmModeButtons = [...asmSelection.querySelectorAll("[data-mode]")];
+const mateBtn = document.getElementById("mateBtn");
+const undoMoveBtn = document.getElementById("undoMoveBtn");
 
 const narrowScreen = window.matchMedia("(max-width: 900px)");
 
@@ -124,6 +141,11 @@ const capMaterial = new THREE.MeshBasicMaterial({ color: 0xff9e7a, side: THREE.B
 
 let currentModel = null;
 let exportSource = null;
+// exportSource's scale to millimetres: a part's GLB is in metres; the assembly is already in mm.
+let exportScale = 1000;
+// Bumped whenever the viewer's content changes, so a model that finishes
+// loading late can't replace what's on screen by then.
+let displayToken = 0;
 let edgeGroup = null;
 let capGroup = null;
 let wireframeOn = false;
@@ -148,7 +170,7 @@ function markView(name) {
 // and its +Y (away from a front-view camera) is -Z.
 function setView(name) {
   if (!lastFrame) return;
-  const { dist, midY } = lastFrame;
+  const { dist, midY, cx = 0, cz = 0 } = lastFrame;
   const r = dist * 1.5;
   const positions = {
     iso: [dist * 0.85, midY + dist * 0.72, dist],
@@ -157,8 +179,8 @@ function setView(name) {
     front: [0, midY, r],
     right: [r, midY, 0],
   };
-  desiredCamPos.set(...positions[name]);
-  desiredTarget.set(0, midY, 0);
+  desiredCamPos.set(...positions[name]).add(new THREE.Vector3(cx, 0, cz));
+  desiredTarget.set(cx, midY, cz);
   framing = true;
   markView(name);
 }
@@ -166,16 +188,22 @@ function setView(name) {
 // Rests the part on the grid and sizes the grid/fog to it. Centring it on the
 // origin instead would leave it half-buried, letting nearer ground-plane lines
 // draw over the model.
-function placeModel(object, reframe) {
+// With recenter false (the assembly) the object stays put: its parts are where
+// the user arranged them.
+function placeModel(object, reframe, recenter = true) {
   const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
+  const empty = box.isEmpty();
+  const size = empty ? new THREE.Vector3(100, 0, 100) : box.getSize(new THREE.Vector3());
+  const center = empty ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z, 1);
 
-  object.position.sub(center);
-  object.position.y += size.y / 2;
-
-  lastFrame = { dist: maxDim * 2.1, midY: size.y / 2 };
+  if (recenter) {
+    object.position.sub(center);
+    object.position.y += size.y / 2;
+    lastFrame = { dist: maxDim * 2.1, midY: size.y / 2 };
+  } else {
+    lastFrame = { dist: maxDim * 2.1, midY: center.y, cx: center.x, cz: center.z };
+  }
   grid.scale.setScalar(Math.max(maxDim / 60, 0.06));
   const isoDistance = lastFrame.dist * 1.5;
   scene.fog.near = isoDistance * 1.05;
@@ -221,18 +249,25 @@ window.addEventListener("resize", () => {
 
 /* ---------------- model ---------------- */
 
+// Per mesh geometry, which the copies of a part in an assembly share.
+const edgeCache = new WeakMap();
+
 function buildEdges(model) {
   const group = new THREE.Group();
   model.traverse((child) => {
     if (!child.isMesh) return;
-    // The exported mesh isn't vertex-welded, so EdgesGeometry would treat every
-    // triangle side as a boundary and draw the whole triangulation. Weld on
-    // position alone — including normals would keep coincident vertices apart
-    // wherever a curved surface varies them, leaving tessellation seams behind.
-    const posOnly = new THREE.BufferGeometry();
-    posOnly.setAttribute("position", child.geometry.getAttribute("position").clone());
-    if (child.geometry.index) posOnly.setIndex(child.geometry.index.clone());
-    const edges = new THREE.EdgesGeometry(mergeVertices(posOnly, 1e-4), 30);
+    let edges = edgeCache.get(child.geometry);
+    if (!edges) {
+      // The exported mesh isn't vertex-welded, so EdgesGeometry would treat every
+      // triangle side as a boundary and draw the whole triangulation. Weld on
+      // position alone — including normals would keep coincident vertices apart
+      // wherever a curved surface varies them, leaving tessellation seams behind.
+      const posOnly = new THREE.BufferGeometry();
+      posOnly.setAttribute("position", child.geometry.getAttribute("position").clone());
+      if (child.geometry.index) posOnly.setIndex(child.geometry.index.clone());
+      edges = new THREE.EdgesGeometry(mergeVertices(posOnly, 1e-4), 30);
+      edgeCache.set(child.geometry, edges);
+    }
     const lines = new THREE.LineSegments(edges, edgeMaterial);
     lines.userData.source = child;
     child.getWorldPosition(lines.position);
@@ -251,12 +286,12 @@ function applyWireframeState() {
   wireframeBtn.classList.toggle("active", wireframeOn);
 }
 
-// The part as build123d made it: glTF export stored it in metres and rotated
-// it to Y-up, so undo both to get millimetres and Z-up.
+// The part (or assembly) in build123d's terms: glTF export stored parts in
+// metres and rotated them to Y-up, so undo both to get millimetres and Z-up.
 function exportRoot() {
   const root = new THREE.Group();
   root.add(exportSource.clone());
-  root.scale.setScalar(1000);
+  root.scale.setScalar(exportScale);
   root.rotation.x = Math.PI / 2;
   root.updateMatrixWorld(true);
   return root;
@@ -293,29 +328,37 @@ function describePart({ size, volume }) {
   return `${dims} mm · ≈ ${vol}`;
 }
 
-function showModel(gltf, reframe, parts) {
-  if (currentModel) scene.remove(currentModel);
+// Makes object the model everything else works on (views, section, measuring,
+// export), replacing what was on screen. source is what gets exported, at
+// `scale` to millimetres.
+function setCurrentObject(object, { reframe, recenter = true, source = object, scale = 1000 }) {
+  displayToken++;
+  removeCurrentObject();
+  currentModel = object;
+  exportSource = source;
+  exportScale = scale;
+  scene.add(object);
+  placeModel(object, reframe, recenter);
+  refreshHelpers();
+}
+
+function removeCurrentObject() {
+  for (const object of [currentModel, edgeGroup, capGroup]) if (object) scene.remove(object);
+  currentModel = edgeGroup = capGroup = exportSource = null;
+}
+
+// Rebuilds what depends on the current model's shape and placement: edge lines,
+// section caps and the size readout.
+function refreshHelpers() {
   if (edgeGroup) scene.remove(edgeGroup);
   if (capGroup) scene.remove(capGroup);
-
-  // Untouched copy for export and measuring, taken before the viewer rescales and moves it.
-  exportSource = gltf.scene.clone();
-
-  currentModel = gltf.scene;
-  // export_gltf follows the glTF spec (units = meters); build123d models are
-  // authored in mm, so scale back up to keep the viewer's camera math (tuned
-  // for mm-scale numbers) from clipping small parts against the near plane.
-  currentModel.scale.setScalar(1000);
-  colorParts(currentModel, parts);
-  scene.add(currentModel);
-  placeModel(currentModel, reframe);
-
   currentModel.updateMatrixWorld(true);
   edgeGroup = buildEdges(currentModel);
   scene.add(edgeGroup);
   capGroup = buildCaps(currentModel);
   scene.add(capGroup);
   applyWireframeState();
+  syncPartHelpers();
 
   const part = measure(exportRoot());
   partBox = part.box;
@@ -326,11 +369,39 @@ function showModel(gltf, reframe, parts) {
   if (!busy) showViewerStatus(idleStatusText());
 }
 
+function showModel(gltf, reframe, parts) {
+  // Untouched copy for export and measuring, taken before the viewer rescales and moves it.
+  const source = gltf.scene.clone();
+  const model = gltf.scene;
+  // export_gltf follows the glTF spec (units = meters); build123d models are
+  // authored in mm, so scale back up to keep the viewer's camera math (tuned
+  // for mm-scale numbers) from clipping small parts against the near plane.
+  model.scale.setScalar(1000);
+  colorParts(model, parts);
+  setCurrentObject(model, { reframe, source });
+}
+
+// An empty viewer, for a part that hasn't been built yet.
+function clearViewer() {
+  displayToken++;
+  setSection(false);
+  setMeasuring(false);
+  removeCurrentObject();
+  partInfoText = "";
+  partBox = null;
+  viewerStatus.hidden = true;
+  modelTools.forEach((btn) => (btn.disabled = true));
+  paramsCard.hidden = true;
+  partsCard.hidden = true;
+  codeView.textContent = "";
+}
+
 function loadModel(glbBytes, reframe, parts) {
+  const token = ++displayToken;
   loader.parse(
-    glbBytes.buffer,
+    glbBytes.slice().buffer,
     "",
-    (gltf) => showModel(gltf, reframe, parts),
+    (gltf) => token === displayToken && showModel(gltf, reframe, parts),
     (err) => {
       const el = document.createElement("div");
       chatLog.appendChild(el);
@@ -413,8 +484,10 @@ function setProviderBadge(provider) {
 
 /* ---------------- versions ---------------- */
 
-const conversation = [];
-const versions = [];
+// The active part's conversation and versions: the part's own arrays, so what's
+// added here is saved with the part.
+let conversation = [];
+let versions = [];
 let activeVersion = -1;
 let currentCode = "";
 let busy = false;
@@ -422,8 +495,23 @@ let busy = false;
 const fence = (code) => "```python\n" + code + "\n```";
 
 function addVersion(entryEl, code, glbBytes, reframe, parts) {
-  versions.push({ code, glbBytes, parts, conversation: conversation.slice(), entryEl });
+  versions.push({ code, glbBytes, parts, conversation: conversation.slice() });
   const index = versions.length - 1;
+  decorateVersionEntry(entryEl, index);
+  showVersion(index, reframe);
+  return index;
+}
+
+// Records a successful build, shown on its chat entry, as a new version of the active part.
+function commitVersion(entryEl, text, data, reframe) {
+  setEntrySuccess(entryEl, text);
+  const index = addVersion(entryEl, data.code, base64ToBytes(data.glb_base64), reframe, data.parts);
+  recordLog({ kind: "version", text, version: index });
+}
+
+// Makes a chat entry the handle for version `index`: tagged, and clickable to restore it.
+function decorateVersionEntry(entryEl, index) {
+  versions[index].entryEl = entryEl;
 
   const tag = document.createElement("span");
   tag.className = "version-tag";
@@ -446,13 +534,13 @@ function addVersion(entryEl, code, glbBytes, reframe, parts) {
       restore();
     }
   });
-
-  showVersion(index, reframe);
 }
 
 function showVersion(index, reframe) {
   activeVersion = index;
-  versions.forEach((v, i) => v.entryEl.classList.toggle("is-active", i === index));
+  activePart.activeVersion = index;
+  scheduleSave();
+  versions.forEach((v, i) => v.entryEl?.classList.toggle("is-active", i === index));
   const version = versions[index];
   currentCode = version.code;
   codeView.textContent = version.code;
@@ -466,6 +554,7 @@ function setBusy(on, label = "") {
   busy = on;
   sendBtn.disabled = on;
   chatLog.classList.toggle("is-busy", on);
+  partTabs.classList.toggle("is-busy", on);
   paramsCard.classList.toggle("is-busy", on);
   paramsList.querySelectorAll("input").forEach((field) => (field.disabled = on));
   if (on) showViewerStatus(label, { loading: true });
@@ -561,8 +650,7 @@ async function rebuildWithParam(param, field) {
     if (conversation.length && conversation[conversation.length - 1].role === "assistant") {
       conversation[conversation.length - 1] = { role: "assistant", content: fence(data.code) };
     }
-    setEntrySuccess(pending, label);
-    addVersion(pending, data.code, base64ToBytes(data.glb_base64), false, data.parts);
+    commitVersion(pending, label, data, false);
   } else {
     if (data) setEntryError(pending, `Couldn't rebuild with ${label}: ${data.error}`);
     field.value = String(param.value);
@@ -709,6 +797,7 @@ form.addEventListener("submit", async (e) => {
   if (!prompt || busy) return;
 
   addUserEntry(prompt);
+  recordLog({ kind: "user", text: prompt });
   input.value = "";
   autoResize();
   sendBtn.classList.add("is-loading");
@@ -725,18 +814,25 @@ form.addEventListener("submit", async (e) => {
     conversation.splice(0, Math.max(0, conversation.length - HISTORY_LIMIT));
 
     const retryNote = data.attempts > 1 ? ` · self-repaired after ${data.attempts} attempts` : "";
-    setEntrySuccess(pending, `Built via ${data.provider_used}${retryNote}`);
     setProviderBadge(data.provider_used);
-    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true, data.parts);
+    // A new part is named after its first successful prompt, unless renamed.
+    if (activePart.autoName && !versions.length) {
+      activePart.name = nameFromPrompt(prompt);
+      activePart.autoName = false;
+      renderPartTabs();
+    }
+    commitVersion(pending, `Built via ${data.provider_used}${retryNote}`, data, true);
     if (data.note) {
       // The part built, but the automatic review still sees a problem.
       const noteEl = document.createElement("div");
       chatLog.appendChild(noteEl);
       setEntryError(noteEl, `Self-check: ${data.note}`);
       noteEl.classList.replace("is-error", "is-warning");
+      recordLog({ kind: "warning", text: `Self-check: ${data.note}` });
     }
   } else if (data) {
     setEntryError(pending, data.error);
+    recordLog({ kind: "error", text: data.error });
     if (data.code) codeView.textContent = data.code;
   }
 
@@ -890,7 +986,13 @@ const rulerPointGeometry = new THREE.SphereGeometry(1, 16, 12);
 const SNAP_PIXELS = 10;
 
 function idleStatusText() {
-  return ruler.on ? "Click two points on the part to measure" : partInfoText;
+  if (ruler.on) return "Click two points on the part to measure";
+  if (assembly.mating) return assembly.mateFirst ? "Now click the face it should sit against" : "Click a flat face on the part to move";
+  if (assembly.on) {
+    const count = assembly.root ? assembly.root.children.length : 0;
+    return count ? `${count} part${count === 1 ? "" : "s"} · ${partInfoText}` : "Insert parts from the panel to start";
+  }
+  return partInfoText;
 }
 
 // The canvas fills the window, so window coordinates are canvas coordinates.
@@ -970,6 +1072,7 @@ function clearRuler() {
 }
 
 function setMeasuring(on) {
+  if (on && assembly.mating) setMating(false);
   ruler.on = on && Boolean(currentModel);
   measureBtn.classList.toggle("active", ruler.on);
   renderer.domElement.style.cursor = ruler.on ? "crosshair" : "";
@@ -1018,7 +1121,7 @@ async function exportStep() {
   setBusy(true, "Exporting STEP…");
   const { data } = await callApi("/api/export/step", { code: currentCode }, pending, { asBlob: true });
   if (data) {
-    downloadBlob(data, "jokercad-part.step");
+    downloadBlob(data, `${exportName()}.step`);
     setEntrySuccess(pending, `Exported ${label} as STEP`);
   }
   setBusy(false);
@@ -1026,25 +1129,34 @@ async function exportStep() {
 
 // A transparent image of the current view, without the floor grid or measurements.
 function exportPng() {
-  grid.visible = false;
-  rulerGroup.visible = false;
+  const helpers = [grid, rulerGroup, transformHelper, mateGroup];
+  const shown = helpers.map((helper) => helper.visible);
+  helpers.forEach((helper) => (helper.visible = false));
   renderer.render(scene, camera);
   // Read straight after rendering, before the browser clears the canvas.
   const url = renderer.domElement.toDataURL("image/png");
-  grid.visible = true;
-  rulerGroup.visible = true;
-  downloadHref(url, "jokercad-part.png");
+  helpers.forEach((helper, i) => (helper.visible = shown[i]));
+  downloadHref(url, `${exportName()}.png`);
 }
 
 const EXPORTERS = {
   step: exportStep,
   stl: () => {
     const stl = new STLExporter().parse(exportRoot(), { binary: true });
-    downloadBlob(new Blob([stl], { type: "model/stl" }), "jokercad-part.stl");
+    downloadBlob(new Blob([stl], { type: "model/stl" }), `${exportName()}.stl`);
   },
-  glb: () => {
+  glb: async () => {
+    if (assembly.on) {
+      // Written from the viewer's scene, in metres like any glTF.
+      const root = new THREE.Group();
+      root.add(assembly.root.clone());
+      root.scale.setScalar(0.001);
+      const glb = await new GLTFExporter().parseAsync(root, { binary: true });
+      downloadBlob(new Blob([glb], { type: "model/gltf-binary" }), `${exportName()}.glb`);
+      return;
+    }
     const version = versions[activeVersion];
-    if (version) downloadBlob(new Blob([version.glbBytes], { type: "model/gltf-binary" }), "jokercad-part.glb");
+    if (version) downloadBlob(new Blob([version.glbBytes], { type: "model/gltf-binary" }), `${exportName()}.glb`);
   },
   png: exportPng,
 };
@@ -1054,6 +1166,8 @@ function setExportMenu(open) {
   exportBtn.setAttribute("aria-expanded", String(open));
   exportBtn.classList.toggle("active", open);
   if (!open) return;
+  // STEP is rebuilt from a part's code; an assembly has no single script.
+  exportMenu.querySelector('[data-format="step"]').hidden = assembly.on;
   // Positioned by hand: inside the toolbar it would be clipped when the
   // toolbar scrolls sideways on phones.
   const r = exportBtn.getBoundingClientRect();
@@ -1119,7 +1233,10 @@ shareBtn.addEventListener("click", async () => {
 
 async function buildSharedPart(code) {
   if (busy) return false;
+  // A shared part gets a part of its own in the project, unless this one is still empty.
+  if (versions.length || assembly.on) selectPart(addPart("Shared part"));
   addUserEntry("Open the shared part");
+  recordLog({ kind: "user", text: "Open the shared part" });
   const pending = addThinkingEntry("Building the shared part…");
   setBusy(true, "Building part…");
   const { data } = await callApi("/api/run", { code }, pending);
@@ -1127,8 +1244,7 @@ async function buildSharedPart(code) {
   if (ok) {
     // Follow-up prompts then modify the shared part.
     conversation.push({ role: "user", content: "Start from this part." }, { role: "assistant", content: fence(data.code) });
-    setEntrySuccess(pending, "Opened the shared part");
-    addVersion(pending, data.code, base64ToBytes(data.glb_base64), true, data.parts);
+    commitVersion(pending, "Opened the shared part", data, true);
   } else if (data) {
     setEntryError(pending, `Couldn't build the shared part: ${data.error}`);
   }
@@ -1154,6 +1270,7 @@ async function offerSharedPart() {
     return;
   }
 
+  if (assembly.on) selectPart(activePart);
   if (emptyState) emptyState.remove();
   codeView.textContent = code;
   const card = document.createElement("div");
@@ -1172,6 +1289,860 @@ async function offerSharedPart() {
     else buildBtn.disabled = false;
   });
 }
+
+/* ---------------- projects ---------------- */
+
+// Projects live in this browser (IndexedDB), so they need no server or account.
+// "Export project file" writes one out, to keep a backup or move it elsewhere.
+const DB_NAME = "jokercad";
+const DB_STORE = "projects";
+const LAST_PROJECT_KEY = "jokercad-last-project";
+
+let projects = [];
+let project = null;
+let activePart = null;
+let saveTimer = null;
+let pendingSave = null;
+let storageWarned = false;
+
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+let dbPromise = null;
+function openDb() {
+  dbPromise ||= new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(DB_STORE, { keyPath: "id" });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return dbPromise;
+}
+
+async function dbRequest(mode, makeRequest) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(DB_STORE, mode);
+    const request = makeRequest(tx.objectStore(DB_STORE));
+    tx.oncomplete = () => resolve(request.result);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+}
+
+function newPart(name) {
+  return { id: uid(), name, autoName: true, conversation: [], versions: [], activeVersion: -1, log: [] };
+}
+
+function newProject(name) {
+  const created = { id: uid(), name, updatedAt: Date.now(), parts: [], assembly: { instances: [] }, activePartId: null };
+  created.parts.push(newPart("Part 1"));
+  return created;
+}
+
+// Only what's needed to show and rebuild each version is kept; chat elements
+// and parsed models are recreated after loading.
+function serializeProject(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    updatedAt: p.updatedAt,
+    activePartId: p.activePartId,
+    assembly: {
+      instances: p.assembly.instances.map(({ id, partId, position, quaternion }) => ({ id, partId, position, quaternion })),
+    },
+    parts: p.parts.map((part) => ({
+      id: part.id,
+      name: part.name,
+      autoName: part.autoName,
+      conversation: part.conversation,
+      activeVersion: part.activeVersion,
+      log: part.log,
+      versions: part.versions.map(({ code, glbBytes, parts, conversation }) => ({
+        code,
+        glbBytes,
+        parts: parts || null,
+        conversation,
+      })),
+    })),
+  };
+}
+
+function hydrateProject(stored) {
+  const p = { ...stored, assembly: { instances: [], ...stored.assembly } };
+  p.parts = (stored.parts || []).map((part) => ({ ...newPart(part.name), ...part }));
+  if (!p.parts.length) p.parts.push(newPart("Part 1"));
+  return p;
+}
+
+function scheduleSave() {
+  if (!project) return;
+  project.updatedAt = Date.now();
+  if (pendingSave && pendingSave !== project) saveProject(pendingSave);
+  pendingSave = project;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 400);
+}
+
+function flushSave() {
+  clearTimeout(saveTimer);
+  if (pendingSave) saveProject(pendingSave);
+  pendingSave = null;
+}
+
+async function saveProject(p) {
+  try {
+    await dbRequest("readwrite", (store) => store.put(serializeProject(p)));
+  } catch {
+    if (!storageWarned) showToast("This browser didn't save the project. Export it to keep a copy.");
+    storageWarned = true;
+  }
+}
+
+window.addEventListener("pagehide", flushSave);
+
+async function initProjects() {
+  try {
+    projects = (await dbRequest("readonly", (store) => store.getAll())).map(hydrateProject);
+  } catch {
+    projects = [];
+  }
+  if (!projects.length) projects.push(newProject("My first project"));
+  let lastId = null;
+  try {
+    lastId = localStorage.getItem(LAST_PROJECT_KEY);
+  } catch {}
+  openProject(projects.find((p) => p.id === lastId) || mostRecentProject());
+}
+
+const mostRecentProject = () => [...projects].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+
+function openProject(p) {
+  if (busy) return;
+  flushSave();
+  if (assembly.on) leaveAssembly();
+  project = p;
+  try {
+    localStorage.setItem(LAST_PROJECT_KEY, p.id);
+  } catch {}
+  showProjectName();
+  selectPart(p.parts.find((part) => part.id === p.activePartId) || p.parts[0]);
+}
+
+function showProjectName() {
+  projectNameEl.textContent = project.name;
+  document.title = `${project.name} · jokercad`;
+}
+
+function selectPart(part) {
+  if (busy) return;
+  if (assembly.on) leaveAssembly();
+  activePart = part;
+  project.activePartId = part.id;
+  conversation = part.conversation;
+  versions = part.versions;
+  activeVersion = -1;
+  currentCode = "";
+  renderPartTabs();
+  renderPartLog(part);
+  if (versions.length) {
+    const saved = part.activeVersion;
+    showVersion(saved >= 0 && saved < versions.length ? saved : versions.length - 1, true);
+  } else {
+    clearViewer();
+  }
+}
+
+function addPart(name) {
+  const part = newPart(name || `Part ${project.parts.length + 1}`);
+  if (name) part.autoName = false;
+  project.parts.push(part);
+  scheduleSave();
+  return part;
+}
+
+function renamePart(part) {
+  const name = window.prompt("Rename this part", part.name);
+  if (!name || !name.trim()) return;
+  part.name = name.trim().slice(0, 60);
+  part.autoName = false;
+  renderPartTabs();
+  renderAssemblyPanel();
+  scheduleSave();
+}
+
+function deletePart(part) {
+  if (busy || project.parts.length < 2) return;
+  if (!window.confirm(`Delete "${part.name}" and all its versions? This can't be undone.`)) return;
+  project.parts = project.parts.filter((p) => p !== part);
+  project.assembly.instances = project.assembly.instances.filter((i) => i.partId !== part.id);
+  scheduleSave();
+  selectPart(project.parts[0]);
+}
+
+// A short name from a part's first prompt: "a spur gear with 24 teeth" -> "Spur gear".
+function nameFromPrompt(prompt) {
+  const text = prompt
+    .replace(/^\s*(please\s+)?((create|make|design|build|generate|model|draw)\s+)?(me\s+)?((a|an|the)\s+)?/i, "")
+    .split(/[,.;:()]|\s(?:with|that|which|for|having|where|so)\s/i)[0]
+    .trim()
+    .split(/\s+/)
+    .slice(0, 4)
+    .join(" ");
+  return text ? text[0].toUpperCase() + text.slice(1) : "Part";
+}
+
+function recordLog(entry) {
+  activePart.log.push(entry);
+  scheduleSave();
+}
+
+// Recreates a part's chat from its saved log.
+function renderPartLog(part) {
+  chatLog.replaceChildren();
+  if (!part.log.length) {
+    chatLog.append(emptyState);
+    return;
+  }
+  for (const entry of part.log) {
+    const el = document.createElement("div");
+    chatLog.append(el);
+    if (entry.kind === "user") {
+      el.className = "entry entry-user";
+      el.textContent = entry.text;
+    } else if (entry.kind === "version" && versions[entry.version]) {
+      setEntrySuccess(el, entry.text);
+      decorateVersionEntry(el, entry.version);
+    } else if (entry.kind === "warning") {
+      setEntryError(el, entry.text);
+      el.classList.replace("is-error", "is-warning");
+    } else {
+      setEntryError(el, entry.text);
+    }
+  }
+  scrollChatToEnd();
+}
+
+const ICON_ASSEMBLY =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>';
+
+function renderPartTabs() {
+  partTabs.replaceChildren();
+
+  const asmTab = document.createElement("button");
+  asmTab.type = "button";
+  asmTab.className = "part-tab tab-assembly";
+  asmTab.classList.toggle("active", assembly.on);
+  asmTab.title = "Put this project's parts together";
+  asmTab.innerHTML = `${ICON_ASSEMBLY}<span>Assembly</span>`;
+  asmTab.addEventListener("click", () => enterAssembly());
+  partTabs.append(asmTab);
+
+  for (const part of project.parts) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.className = "part-tab";
+    const current = !assembly.on && part === activePart;
+    tab.classList.toggle("active", current);
+    tab.title = "Double-click to rename";
+    const label = document.createElement("span");
+    label.textContent = part.name;
+    tab.append(label);
+    if (current && project.parts.length > 1) {
+      const close = document.createElement("span");
+      close.className = "tab-close";
+      close.title = "Delete this part";
+      close.textContent = "×";
+      close.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deletePart(part);
+      });
+      tab.append(close);
+    }
+    tab.addEventListener("click", () => !current && selectPart(part));
+    tab.addEventListener("dblclick", () => renamePart(part));
+    partTabs.append(tab);
+  }
+
+  const addTab = document.createElement("button");
+  addTab.type = "button";
+  addTab.className = "part-tab tab-add";
+  addTab.title = "New part";
+  addTab.textContent = "+";
+  addTab.addEventListener("click", () => !busy && selectPart(addPart()));
+  partTabs.append(addTab);
+}
+
+function setProjectMenu(open) {
+  projectMenu.hidden = !open;
+  projectBtn.setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  projectList.replaceChildren();
+  for (const p of [...projects].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "project-row";
+    row.classList.toggle("active", p === project);
+    const name = document.createElement("span");
+    name.className = "project-row-name";
+    name.textContent = p.name;
+    const meta = document.createElement("span");
+    meta.className = "project-row-meta";
+    meta.textContent = `${p.parts.length} part${p.parts.length === 1 ? "" : "s"}`;
+    row.append(name, meta);
+    row.addEventListener("click", () => {
+      setProjectMenu(false);
+      if (p !== project) openProject(p);
+    });
+    projectList.append(row);
+  }
+  const r = projectBtn.getBoundingClientRect();
+  projectMenu.style.top = `${r.bottom + 8}px`;
+  projectMenu.style.left = `${Math.max(12, Math.min(r.left, window.innerWidth - projectMenu.offsetWidth - 12))}px`;
+}
+
+projectBtn.addEventListener("click", () => setProjectMenu(projectMenu.hidden));
+
+document.addEventListener("pointerdown", (e) => {
+  if (!projectMenu.hidden && !projectMenu.contains(e.target) && !projectBtn.contains(e.target)) setProjectMenu(false);
+});
+
+const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "jokercad";
+
+function exportName() {
+  return slug(assembly.on ? `${project.name} assembly` : activePart.name);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+const PROJECT_ACTIONS = {
+  new() {
+    const name = window.prompt("Name the new project", "Untitled project");
+    if (!name || !name.trim()) return;
+    const created = newProject(name.trim().slice(0, 60));
+    projects.push(created);
+    openProject(created);
+    scheduleSave();
+  },
+  rename() {
+    const name = window.prompt("Rename this project", project.name);
+    if (!name || !name.trim()) return;
+    project.name = name.trim().slice(0, 60);
+    showProjectName();
+    scheduleSave();
+  },
+  export() {
+    const data = serializeProject(project);
+    data.parts.forEach((part) => part.versions.forEach((v) => (v.glbBytes = bytesToBase64(v.glbBytes))));
+    const file = JSON.stringify({ format: "jokercad-project", version: 1, project: data });
+    downloadBlob(new Blob([file], { type: "application/json" }), `${slug(project.name)}.jokercad.json`);
+  },
+  import() {
+    importInput.click();
+  },
+  async delete() {
+    if (!window.confirm(`Delete the project "${project.name}" and all its parts? This can't be undone.`)) return;
+    const doomed = project;
+    if (pendingSave === doomed) {
+      clearTimeout(saveTimer);
+      pendingSave = null;
+    }
+    projects = projects.filter((p) => p !== doomed);
+    try {
+      await dbRequest("readwrite", (store) => store.delete(doomed.id));
+    } catch {}
+    if (!projects.length) projects.push(newProject("My first project"));
+    openProject(mostRecentProject());
+    scheduleSave();
+  },
+};
+
+projectMenu.querySelectorAll("[data-action]").forEach((item) =>
+  item.addEventListener("click", () => {
+    setProjectMenu(false);
+    if (busy) showToast("Wait for the current build to finish.");
+    else PROJECT_ACTIONS[item.dataset.action]();
+  })
+);
+
+importInput.addEventListener("change", async () => {
+  const file = importInput.files[0];
+  importInput.value = "";
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    const stored = parsed && parsed.project;
+    if (parsed.format !== "jokercad-project" || !stored || !Array.isArray(stored.parts)) {
+      throw new Error("it isn't a jokercad project file");
+    }
+    for (const part of stored.parts) {
+      part.versions = (part.versions || []).map((v) => ({ ...v, glbBytes: base64ToBytes(v.glbBytes) }));
+    }
+    // A new id, so importing the same file twice gives two projects.
+    const imported = hydrateProject({ ...stored, id: uid(), updatedAt: Date.now() });
+    projects.push(imported);
+    openProject(imported);
+    scheduleSave();
+    showToast(`Imported "${imported.name}"`);
+  } catch (err) {
+    showToast(`Couldn't import that file: ${err.message}`);
+  }
+});
+
+/* ---------------- assembly ---------------- */
+
+const assembly = { on: false, root: null, selected: null, mating: false, mateFirst: null, undo: [] };
+
+const transform = new TransformControls(camera, renderer.domElement);
+// three.js r169 puts the handles in a separate helper object; older releases
+// made the controls themselves the object to add.
+const transformHelper = transform.getHelper ? transform.getHelper() : transform;
+transform.setTranslationSnap(1);
+transform.setRotationSnap(THREE.MathUtils.degToRad(15));
+transform.setSize(0.8);
+scene.add(transformHelper);
+
+// Highlights the face picked for snapping.
+const mateGroup = new THREE.Group();
+scene.add(mateGroup);
+const mateMaterial = new THREE.MeshBasicMaterial({
+  color: 0x3ddc97,
+  transparent: true,
+  opacity: 0.6,
+  side: THREE.DoubleSide,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2,
+});
+
+const instanceGroups = () => (assembly.root ? assembly.root.children : []);
+const selectedGroup = () => instanceGroups().find((g) => g.userData.instance.id === assembly.selected) || null;
+
+function instanceGroupOf(object) {
+  for (let o = object; o; o = o.parent) if (o.userData.instance) return o;
+  return null;
+}
+
+// The parsed model of a part's current version, shared by all its copies.
+function partScene(part) {
+  const version = part.versions[part.activeVersion >= 0 ? part.activeVersion : part.versions.length - 1];
+  if (!version) return Promise.resolve(null);
+  version.scene ||= new Promise((resolve, reject) =>
+    loader.parse(version.glbBytes.slice().buffer, "", (gltf) => resolve(gltf.scene), reject)
+  );
+  return version.scene;
+}
+
+async function enterAssembly() {
+  if (busy || assembly.on) return;
+  setSection(false);
+  setMeasuring(false);
+  setCodeDrawer(false);
+  setExportMenu(false);
+  assembly.on = true;
+  document.body.classList.add("assembly-mode");
+  assemblyPanel.hidden = false;
+  codeToggleBtn.disabled = true;
+  setTransformMode(transform.getMode());
+  renderPartTabs();
+  renderAssemblyPanel();
+  await rebuildAssembly(true);
+}
+
+function leaveAssembly() {
+  assembly.on = false;
+  setMating(false);
+  transform.detach();
+  Object.assign(assembly, { root: null, selected: null, undo: [] });
+  undoMoveBtn.disabled = true;
+  document.body.classList.remove("assembly-mode");
+  assemblyPanel.hidden = true;
+  codeToggleBtn.disabled = false;
+  setSection(false);
+  setMeasuring(false);
+}
+
+// Builds the assembly from the project: a copy of each inserted part's current
+// version, in the part's colour, where the user placed it.
+async function rebuildAssembly(reframe) {
+  const token = ++displayToken;
+  const root = new THREE.Group();
+  root.name = project.name;
+  for (const inst of project.assembly.instances) {
+    const partIndex = project.parts.findIndex((p) => p.id === inst.partId);
+    const part = project.parts[partIndex];
+    const source = part && (await partScene(part).catch(() => null));
+    if (!source) continue;
+    const group = new THREE.Group();
+    group.name = part.name;
+    group.userData.instance = inst;
+    const model = source.clone();
+    model.scale.setScalar(1000);
+    const material = partMaterials[partIndex % partMaterials.length];
+    model.traverse((o) => o.isMesh && (o.material = material));
+    group.add(model);
+    group.position.fromArray(inst.position);
+    group.quaternion.fromArray(inst.quaternion);
+    root.add(group);
+  }
+  if (token !== displayToken || !assembly.on) return;
+  transform.detach();
+  assembly.root = root;
+  setCurrentObject(root, { reframe, recenter: false, scale: 1 });
+  modelTools.forEach((btn) => (btn.disabled = !root.children.length));
+  shareBtn.disabled = true;
+  paramsCard.hidden = true;
+  partsCard.hidden = true;
+  selectInstance(assembly.selected);
+}
+
+function renderAssemblyPanel() {
+  if (!assembly.on) return;
+  asmPartList.replaceChildren();
+  project.parts.forEach((part, i) => {
+    const row = document.createElement("div");
+    row.className = "asm-part";
+    const dot = document.createElement("span");
+    dot.className = "part-dot";
+    dot.style.background = `#${partMaterials[i % partMaterials.length].color.getHexString()}`;
+    const name = document.createElement("span");
+    name.className = "asm-name";
+    name.textContent = part.name;
+    const insert = document.createElement("button");
+    insert.type = "button";
+    insert.className = "text-btn";
+    insert.textContent = "Insert";
+    insert.disabled = !part.versions.length;
+    insert.title = part.versions.length ? `Add a copy of ${part.name}` : "Build this part first";
+    insert.addEventListener("click", () => insertPart(part));
+    row.append(dot, name, insert);
+    asmPartList.append(row);
+  });
+
+  asmInstanceList.replaceChildren();
+  const counts = new Map();
+  let selectedLabel = "";
+  for (const inst of project.assembly.instances) {
+    const i = project.parts.findIndex((p) => p.id === inst.partId);
+    if (i < 0) continue;
+    counts.set(inst.partId, (counts.get(inst.partId) || 0) + 1);
+    const label = `${project.parts[i].name} #${counts.get(inst.partId)}`;
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "asm-instance";
+    row.classList.toggle("active", inst.id === assembly.selected);
+    const dot = document.createElement("span");
+    dot.className = "part-dot";
+    dot.style.background = `#${partMaterials[i % partMaterials.length].color.getHexString()}`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    row.append(dot, text);
+    row.addEventListener("click", () => selectInstance(inst.id));
+    asmInstanceList.append(row);
+    if (inst.id === assembly.selected) selectedLabel = label;
+  }
+  if (!asmInstanceList.children.length) {
+    asmInstanceList.innerHTML = '<p class="asm-empty">Nothing here yet. Insert a part above.</p>';
+  }
+
+  asmSelection.hidden = !selectedGroup();
+  asmSelName.textContent = selectedLabel;
+  updateSelectionFields();
+}
+
+function selectInstance(id) {
+  assembly.selected = id;
+  const group = assembly.mating ? null : selectedGroup();
+  if (group) transform.attach(group);
+  else transform.detach();
+  if (!selectedGroup()) assembly.selected = null;
+  renderAssemblyPanel();
+}
+
+function setTransformMode(mode) {
+  transform.setMode(mode);
+  asmModeButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.mode === mode));
+}
+
+// Position fields use the part's own axes (Z up), like the code does.
+function updateSelectionFields() {
+  const group = selectedGroup();
+  if (!group) return;
+  const values = { x: group.position.x, y: -group.position.z, z: group.position.y };
+  asmFields.forEach((field) => {
+    if (document.activeElement !== field) field.value = values[field.dataset.axis].toFixed(1);
+  });
+}
+
+function pushUndo(group) {
+  assembly.undo.push({ id: group.userData.instance.id, position: group.position.toArray(), quaternion: group.quaternion.toArray() });
+  if (assembly.undo.length > 50) assembly.undo.shift();
+  undoMoveBtn.disabled = false;
+}
+
+// Saves a moved copy's placement and redraws what depends on it.
+function commitInstance(group) {
+  const inst = group.userData.instance;
+  inst.position = group.position.toArray();
+  inst.quaternion = group.quaternion.toArray();
+  scheduleSave();
+  refreshHelpers();
+  updateSelectionFields();
+}
+
+function undoMove() {
+  const step = assembly.undo.pop();
+  undoMoveBtn.disabled = !assembly.undo.length;
+  if (!step) return;
+  const group = instanceGroups().find((g) => g.userData.instance.id === step.id);
+  // A copy that's since been removed: undo the step before instead.
+  if (!group) return undoMove();
+  group.position.fromArray(step.position);
+  group.quaternion.fromArray(step.quaternion);
+  commitInstance(group);
+  selectInstance(step.id);
+}
+
+async function insertPart(part) {
+  const source = await partScene(part);
+  if (!source || !assembly.on) return;
+  const model = source.clone();
+  model.scale.setScalar(1000);
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  const existing = instanceGroups().length ? new THREE.Box3().setFromObject(assembly.root) : null;
+  // Placed on the floor, beside what's already there.
+  const x = existing ? existing.max.x + 10 - box.min.x : -(box.min.x + box.max.x) / 2;
+  const inst = { id: uid(), partId: part.id, position: [x, -box.min.y, -(box.min.z + box.max.z) / 2], quaternion: [0, 0, 0, 1] };
+  project.assembly.instances.push(inst);
+  assembly.selected = inst.id;
+  scheduleSave();
+  await rebuildAssembly(true);
+}
+
+async function duplicateSelected() {
+  const group = selectedGroup();
+  if (!group) return;
+  const inst = group.userData.instance;
+  const width = new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3()).x;
+  const copy = { id: uid(), partId: inst.partId, position: [inst.position[0] + width + 10, inst.position[1], inst.position[2]], quaternion: [...inst.quaternion] };
+  project.assembly.instances.push(copy);
+  assembly.selected = copy.id;
+  scheduleSave();
+  await rebuildAssembly(false);
+}
+
+function removeInstance(id) {
+  project.assembly.instances = project.assembly.instances.filter((i) => i.id !== id);
+  if (assembly.selected === id) assembly.selected = null;
+  scheduleSave();
+  rebuildAssembly(false);
+}
+
+function turnSelected(axis) {
+  const group = selectedGroup();
+  if (!group) return;
+  pushUndo(group);
+  group.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(PART_AXES[axis], Math.PI / 2));
+  commitInstance(group);
+}
+
+function dropSelectedToFloor() {
+  const group = selectedGroup();
+  if (!group) return;
+  pushUndo(group);
+  group.position.y -= new THREE.Box3().setFromObject(group).min.y;
+  commitInstance(group);
+}
+
+transform.addEventListener("dragging-changed", (e) => {
+  controls.enabled = !e.value;
+  const group = selectedGroup();
+  if (!group) return;
+  if (e.value) {
+    pushUndo(group);
+    // The edge lines and caps are redrawn once the move ends.
+    if (edgeGroup) edgeGroup.visible = false;
+    if (capGroup) capGroup.visible = false;
+  } else {
+    commitInstance(group);
+  }
+});
+transform.addEventListener("objectChange", updateSelectionFields);
+
+asmFields.forEach((field) =>
+  field.addEventListener("change", () => {
+    const group = selectedGroup();
+    const value = Number(field.value);
+    if (!group || field.value.trim() === "" || !Number.isFinite(value)) return updateSelectionFields();
+    pushUndo(group);
+    if (field.dataset.axis === "x") group.position.x = value;
+    else if (field.dataset.axis === "y") group.position.z = -value;
+    else group.position.y = value;
+    commitInstance(group);
+  })
+);
+
+asmModeButtons.forEach((btn) => btn.addEventListener("click", () => setTransformMode(btn.dataset.mode)));
+asmSelection.querySelectorAll("[data-turn]").forEach((btn) => btn.addEventListener("click", () => turnSelected(btn.dataset.turn)));
+asmSelection.querySelector('[data-action="floor"]').addEventListener("click", dropSelectedToFloor);
+asmSelection.querySelector('[data-action="duplicate"]').addEventListener("click", duplicateSelected);
+asmSelection.querySelector('[data-action="remove"]').addEventListener("click", () => assembly.selected && removeInstance(assembly.selected));
+undoMoveBtn.addEventListener("click", undoMove);
+
+/* ---------------- snapping faces ---------------- */
+
+function setMating(on) {
+  if (on && instanceGroups().length < 2) {
+    showToast("Insert at least two parts to snap them together.");
+    return;
+  }
+  assembly.mating = on && assembly.on;
+  assembly.mateFirst = null;
+  clearMateHighlight();
+  mateBtn.classList.toggle("active", assembly.mating);
+  mateBtn.textContent = assembly.mating ? "Cancel snapping" : "Snap faces together";
+  if (assembly.mating) setMeasuring(false);
+  selectInstance(assembly.selected);
+  renderer.domElement.style.cursor = assembly.mating ? "crosshair" : "";
+  if (!busy && partInfoText) showViewerStatus(idleStatusText());
+}
+
+mateBtn.addEventListener("click", () => setMating(!assembly.mating));
+
+function clearMateHighlight() {
+  mateGroup.children.forEach((child) => child.geometry.dispose());
+  mateGroup.clear();
+}
+
+// The first visible point of the model under the pointer.
+function modelHitAt(event) {
+  const pointer = new THREE.Vector2(
+    (event.clientX / window.innerWidth) * 2 - 1,
+    -(event.clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(pointer, camera);
+  return (
+    raycaster
+      .intersectObject(currentModel, true)
+      .find((h) => shownInModel(h.object) && (!section.on || sectionPlane.distanceToPoint(h.point) >= 0)) || null
+  );
+}
+
+// The flat face around a clicked triangle: every coplanar triangle connected
+// to it. Snapping lines up its area-weighted centre, so the ring around a hole
+// and the end of a pin both snap by their centres.
+function planarFace(hit) {
+  const mesh = hit.object;
+  const position = mesh.geometry.getAttribute("position");
+  const index = mesh.geometry.index;
+  const triangleCount = (index ? index.count : position.count) / 3;
+  const corner = (t, k) =>
+    new THREE.Vector3().fromBufferAttribute(position, index ? index.getX(3 * t + k) : 3 * t + k).applyMatrix4(mesh.matrixWorld);
+  const triangle = new THREE.Triangle();
+  const scratch = new THREE.Vector3();
+  const normal = new THREE.Triangle(corner(hit.faceIndex, 0), corner(hit.faceIndex, 1), corner(hit.faceIndex, 2)).getNormal(
+    new THREE.Vector3()
+  );
+  const planeOffset = normal.dot(corner(hit.faceIndex, 0));
+  // Corners closer than 0.01 mm count as the same point: the mesh isn't welded.
+  const key = (v) => `${Math.round(v.x * 100)},${Math.round(v.y * 100)},${Math.round(v.z * 100)}`;
+
+  const coplanar = new Map();
+  const byCorner = new Map();
+  for (let t = 0; t < triangleCount; t++) {
+    const corners = [corner(t, 0), corner(t, 1), corner(t, 2)];
+    triangle.set(...corners);
+    if (triangle.getArea() < 1e-9) continue;
+    if (triangle.getNormal(scratch).dot(normal) < 0.9995) continue;
+    if (Math.abs(normal.dot(corners[0]) - planeOffset) > 0.02) continue;
+    coplanar.set(t, corners);
+    for (const c of corners) {
+      const k = key(c);
+      if (!byCorner.has(k)) byCorner.set(k, []);
+      byCorner.get(k).push(t);
+    }
+  }
+
+  const face = new Set([hit.faceIndex]);
+  const queue = [hit.faceIndex];
+  while (queue.length) {
+    for (const c of coplanar.get(queue.pop()) || []) {
+      for (const other of byCorner.get(key(c))) {
+        if (!face.has(other)) {
+          face.add(other);
+          queue.push(other);
+        }
+      }
+    }
+  }
+
+  const center = new THREE.Vector3();
+  const points = [];
+  let area = 0;
+  for (const t of face) {
+    const corners = coplanar.get(t);
+    if (!corners) continue;
+    triangle.set(...corners);
+    const a = triangle.getArea();
+    center.addScaledVector(triangle.getMidpoint(scratch), a);
+    area += a;
+    points.push(...corners);
+  }
+  if (area > 0) center.divideScalar(area);
+  else center.copy(hit.point);
+  return { normal, center, points };
+}
+
+// Turns the moving copy so its face points straight at the target face, then
+// slides it until the two faces' centres meet.
+function snapFaces(moving, target) {
+  const group = moving.group;
+  pushUndo(group);
+  const turn = new THREE.Quaternion().setFromUnitVectors(moving.normal, target.normal.clone().negate());
+  const offset = moving.center.clone().sub(group.position).applyQuaternion(turn);
+  group.quaternion.premultiply(turn);
+  group.position.copy(target.center).sub(offset);
+  commitInstance(group);
+}
+
+function handleMateClick(event) {
+  const hit = modelHitAt(event);
+  const group = hit && instanceGroupOf(hit.object);
+  if (!group) return;
+  const face = { group, ...planarFace(hit) };
+  if (!assembly.mateFirst) {
+    assembly.mateFirst = face;
+    clearMateHighlight();
+    mateGroup.add(new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(face.points), mateMaterial));
+    showViewerStatus(idleStatusText());
+    return;
+  }
+  if (group === assembly.mateFirst.group) {
+    showToast("Pick a face on a different part.");
+    return;
+  }
+  const moving = assembly.mateFirst;
+  snapFaces(moving, face);
+  setMating(false);
+  selectInstance(moving.group.userData.instance.id);
+  showToast("Snapped. Ctrl+Z undoes it.");
+}
+
+// A click (not the end of an orbit drag) selects a copy, or picks a face to snap.
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!assembly.on || ruler.on || !pointerDownAt || e.button !== 0) return;
+  if (Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5) return;
+  if (transform.dragging || transform.axis) return;
+  if (assembly.mating) {
+    handleMateClick(e);
+    return;
+  }
+  const group = modelHitAt(e) && instanceGroupOf(modelHitAt(e).object);
+  selectInstance(group ? group.userData.instance.id : null);
+});
 
 /* ---------------- toolbar ---------------- */
 
@@ -1205,24 +2176,38 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     // Closes the most recently opened thing first.
     if (!exportMenu.hidden) setExportMenu(false);
+    else if (!projectMenu.hidden) setProjectMenu(false);
     else if (codeDrawer.classList.contains("is-open")) setCodeDrawer(false);
+    else if (assembly.mating) setMating(false);
     else if (ruler.on) setMeasuring(false);
     else if (section.on) setSection(false);
+    else if (assembly.selected) selectInstance(null);
     return;
   }
   const typing = e.target.matches("textarea, input:not([type=range])");
-  if (typing || e.metaKey || e.ctrlKey || e.altKey || !currentModel || !lockScreen.hidden) return;
+  if (typing || !lockScreen.hidden) return;
   const key = e.key.toLowerCase();
+  if (assembly.on && (e.ctrlKey || e.metaKey) && key === "z") {
+    e.preventDefault();
+    undoMove();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey || !currentModel) return;
   if (VIEW_KEYS[key]) setView(VIEW_KEYS[key]);
   else if (key === "w") toggleWireframe();
   else if (key === "s") setSection(!section.on);
   else if (key === "m") setMeasuring(!ruler.on);
+  else if (assembly.on && key === "g") setTransformMode("translate");
+  else if (assembly.on && key === "r") setTransformMode("rotate");
+  else if (assembly.on && assembly.selected && (key === "delete" || key === "backspace")) removeInstance(assembly.selected);
   else return;
   e.preventDefault();
 });
 
 input.focus();
 initAccess();
-offerSharedPart();
-// A share link pasted into a tab that's already open only changes the hash.
-window.addEventListener("hashchange", offerSharedPart);
+initProjects().then(() => {
+  offerSharedPart();
+  // A share link pasted into a tab that's already open only changes the hash.
+  window.addEventListener("hashchange", offerSharedPart);
+});
