@@ -146,6 +146,18 @@ def _consume_generation_slot() -> None:
         _generation_times.append(now)
 
 
+def _generation_status() -> tuple[int, int] | None:
+    """How much of the shared hourly generation cap is used, for the usage
+    indicator in the UI — or None when there's no cap to show."""
+    if GENERATIONS_PER_HOUR <= 0:
+        return None
+    now = time.monotonic()
+    with _generation_lock:
+        while _generation_times and now - _generation_times[0] > 3600:
+            _generation_times.popleft()
+        return len(_generation_times), GENERATIONS_PER_HOUR
+
+
 def _fence(code: str) -> str:
     return "```python\n" + code + "\n```"
 
@@ -377,7 +389,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     try:
         for attempt in range(1, MAX_REPAIR_ATTEMPTS + 1):
             try:
-                text, provider_used = router.generate(SYSTEM_PROMPT, messages, images=images)
+                text, provider_used = router.generate(SYSTEM_PROMPT, messages, images=images, prefer=req.provider)
             except RouterExhaustedError as e:
                 logger.warning("attempt=%d all providers failed: %s", attempt, e)
                 return flagged or GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
@@ -448,7 +460,7 @@ def plan(req: PlanRequest, request: Request) -> PlanResponse:
     _consume_generation_slot()
 
     try:
-        text, _ = router.generate(PLAN_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+        text, _ = router.generate(PLAN_SYSTEM_PROMPT, [{"role": "user", "content": prompt}], prefer=req.provider)
     except RouterExhaustedError as e:
         return PlanResponse(ok=False, error=e.user_message())
 
@@ -503,6 +515,9 @@ def health():
     resp = {"status": "ok", "providers_configured": configured, "auth_required": bool(APP_PASSWORD)}
     if SUPABASE_URL and SUPABASE_ANON_KEY:
         resp["sync"] = {"url": SUPABASE_URL, "anon_key": SUPABASE_ANON_KEY}
+    status = _generation_status()
+    if status:
+        resp["generations"] = {"used": status[0], "limit": status[1]}
     return resp
 
 

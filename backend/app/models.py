@@ -17,6 +17,9 @@ class GenerateRequest(BaseModel):
     image: str | None = Field(default=None, max_length=5_000_000)
     # How mating parts should fit, as "process:kind", e.g. "print:sliding".
     fit: str | None = Field(default=None, max_length=32)
+    # A provider name to try first (e.g. "groq"), chosen by the user instead of
+    # the router's own order. Still falls back to the others if it fails.
+    provider: str | None = Field(default=None, max_length=16)
 
 
 class RunRequest(BaseModel):
@@ -25,6 +28,7 @@ class RunRequest(BaseModel):
 
 class PlanRequest(BaseModel):
     prompt: str
+    provider: str | None = Field(default=None, max_length=16)
 
 
 class PlannedPart(BaseModel):

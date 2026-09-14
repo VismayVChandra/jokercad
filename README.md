@@ -190,7 +190,18 @@ on two devices at once.
   Groq answers the quick check of each built part.
   Free tiers limit each model separately, so each provider also falls back
   to its other models (`GROQ_FALLBACK_MODELS`, `GEMINI_FALLBACK_MODELS`)
-  before giving up.
+  before giving up. When more than one provider is configured, an **AI**
+  picker next to the prompt box (Auto by default) lets you force one instead
+  — useful when Gemini's daily free quota runs out and you'd rather switch
+  to Groq than wait. It still falls back to the others if the one you picked
+  fails, and the choice is remembered in the browser.
+- **Usage**: the number next to the AI picker (e.g. "23/60 this hour") is
+  `GENERATIONS_PER_HOUR`'s shared counter — how much of the whole
+  deployment's hourly cap is used, not a personal quota (jokercad has no
+  accounts or billing, so there's nothing to meter per visitor). There's no
+  way to show a true remaining balance for Gemini's or Groq's own free tier:
+  neither exposes that over their API, only rate-limit errors when it runs
+  out (which the app already explains in plain language when they happen).
 - **Frontend**: Three.js via CDN, no build step.
 - **Hosting**: runs on Vercel's free Hobby plan (see below).
 

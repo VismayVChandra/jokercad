@@ -775,6 +775,18 @@ button {
   margin-top: 0;
 }
 
+.composer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.usage-stat {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .fit-picker {
   display: flex;
   align-items: center;

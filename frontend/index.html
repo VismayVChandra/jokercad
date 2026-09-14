@@ -306,17 +306,24 @@
         </button>
       </div>
       <div class="composer-footer">
-        <label class="fit-picker" title="How parts that go together should fit: holes for pins, shafts, bearings and bolts">
-          Fit
-          <select id="fitSelect">
-            <option value="print:press">Printed, press (+0.1 mm)</option>
-            <option value="print:sliding">Printed, sliding (+0.3 mm)</option>
-            <option value="print:loose">Printed, loose (+0.6 mm)</option>
-            <option value="machined:press">Machined, press (H7/p6)</option>
-            <option value="machined:sliding">Machined, sliding (H7/g6)</option>
-            <option value="machined:loose">Machined, loose (H11/c11)</option>
-          </select>
-        </label>
+        <div class="composer-controls">
+          <label class="fit-picker" title="How parts that go together should fit: holes for pins, shafts, bearings and bolts">
+            Fit
+            <select id="fitSelect">
+              <option value="print:press">Printed, press (+0.1 mm)</option>
+              <option value="print:sliding">Printed, sliding (+0.3 mm)</option>
+              <option value="print:loose">Printed, loose (+0.6 mm)</option>
+              <option value="machined:press">Machined, press (H7/p6)</option>
+              <option value="machined:sliding">Machined, sliding (H7/g6)</option>
+              <option value="machined:loose">Machined, loose (H11/c11)</option>
+            </select>
+          </label>
+          <label id="providerPicker" class="fit-picker" title="Which AI writes the code. Auto tries the fastest, most reliable one first and falls back automatically." hidden>
+            AI
+            <select id="providerSelect"></select>
+          </label>
+          <span id="usageStat" class="usage-stat" title="Generations used this hour, shared by everyone on this deployment" hidden></span>
+        </div>
         <span class="input-hint">⌘/Ctrl + Enter to generate</span>
       </div>
     </form>

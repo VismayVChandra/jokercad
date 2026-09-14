@@ -103,9 +103,18 @@ class LLMRouter:
             p for p in dict.fromkeys(self.review_providers + self.providers) if getattr(p, "supports_images", False)
         ]
 
-    def generate(self, system_prompt: str, messages: list[dict], images: list[bytes] | None = None) -> tuple[str, str]:
-        """Returns (text, provider_name_used). With images, only providers that can see are asked."""
+    def generate(
+        self, system_prompt: str, messages: list[dict], images: list[bytes] | None = None, prefer: str | None = None
+    ) -> tuple[str, str]:
+        """Returns (text, provider_name_used). With images, only providers that can see are asked.
+
+        `prefer` moves a provider the user picked to the front of the list, so it's
+        tried first; the rest stay as fallback if it's unconfigured or fails, the
+        same free-tier safety net as the default order.
+        """
         providers = self.vision_providers if images else self.providers
+        if prefer:
+            providers = [p for p in providers if p.name == prefer] + [p for p in providers if p.name != prefer]
         return self._first_answer(providers, system_prompt, messages, review=False, images=images)
 
     def review(self, system_prompt: str, messages: list[dict]) -> str:

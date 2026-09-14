@@ -112,6 +112,9 @@ const orientBtn = document.getElementById("orientBtn");
 const orientResetBtn = document.getElementById("orientResetBtn");
 const export3mfBtn = document.getElementById("export3mfBtn");
 const fitSelect = document.getElementById("fitSelect");
+const providerPicker = document.getElementById("providerPicker");
+const providerSelect = document.getElementById("providerSelect");
+const usageStat = document.getElementById("usageStat");
 const drawingModal = document.getElementById("drawingModal");
 const drawingPreview = document.getElementById("drawingPreview");
 const drawingProjection = document.getElementById("drawingProjection");
@@ -833,16 +836,78 @@ lockForm.addEventListener("submit", async (e) => {
   }
 });
 
-async function initAccess() {
+async function fetchHealth() {
   try {
-    const health = await (await fetch(`${API_BASE}/api/health`)).json();
-    if (!health.auth_required) return;
-    if (password && (await checkPassword(password))) return;
-    rememberPassword("");
-    showLock();
+    return await (await fetch(`${API_BASE}/api/health`)).json();
   } catch {
-    // If the server can't be reached, the first generate request will say so.
+    return null;
   }
+}
+
+const PROVIDER_LABELS = { gemini: "Gemini", groq: "Groq", ollama: "Ollama" };
+const PROVIDER_KEY = "jokercad-provider";
+let preferredProvider = "";
+try {
+  preferredProvider = localStorage.getItem(PROVIDER_KEY) || "";
+} catch {}
+
+// Only worth a picker once there's a real choice; with one provider, "Auto" is it.
+function populateProviderOptions(configured) {
+  if (!configured || configured.length < 2) {
+    providerPicker.hidden = true;
+    return;
+  }
+  if (preferredProvider && !configured.includes(preferredProvider)) preferredProvider = "";
+  providerSelect.replaceChildren();
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "Auto";
+  providerSelect.appendChild(auto);
+  configured.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = PROVIDER_LABELS[name] || name;
+    providerSelect.appendChild(opt);
+  });
+  providerSelect.value = preferredProvider;
+  providerPicker.hidden = false;
+}
+
+providerSelect.addEventListener("change", () => {
+  preferredProvider = providerSelect.value;
+  try {
+    if (preferredProvider) localStorage.setItem(PROVIDER_KEY, preferredProvider);
+    else localStorage.removeItem(PROVIDER_KEY);
+  } catch {}
+});
+
+// generations: { used, limit } from /api/health, or null when the server has no cap.
+function renderUsageStat(generations) {
+  if (!generations) {
+    usageStat.hidden = true;
+    return;
+  }
+  usageStat.textContent = `${generations.used}/${generations.limit} this hour`;
+  usageStat.hidden = false;
+}
+
+// Refreshes the usage count after a generation — cheap, unauthenticated, and
+// shared across everyone on this deployment (there's no per-visitor account
+// to meter separately), so it's re-read rather than guessed at client-side.
+async function refreshUsage() {
+  const health = await fetchHealth();
+  if (health) renderUsageStat(health.generations || null);
+}
+
+async function initAccess() {
+  const health = await fetchHealth();
+  if (!health) return; // If the server can't be reached, the first generate request will say so.
+  populateProviderOptions(health.providers_configured);
+  renderUsageStat(health.generations || null);
+  if (!health.auth_required) return;
+  if (password && (await checkPassword(password))) return;
+  rememberPassword("");
+  showLock();
 }
 
 /* ---------------- requests ---------------- */
@@ -941,8 +1006,15 @@ async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
   setBusy(true, "Building part…");
   const pending = addThinkingEntry("Generating…");
 
-  const payload = { prompt, history: conversation, fit: fitSelect.value, ...(picture ? { image: picture.base64 } : {}) };
+  const payload = {
+    prompt,
+    history: conversation,
+    fit: fitSelect.value,
+    ...(picture ? { image: picture.base64 } : {}),
+    ...(preferredProvider ? { provider: preferredProvider } : {}),
+  };
   const { data, unauthorized } = await callApi("/api/generate", payload, pending);
+  refreshUsage();
   if (unauthorized && shownAs === prompt) {
     input.value = prompt;
     autoResize();
@@ -1683,7 +1755,8 @@ planGoBtn.addEventListener("click", async () => {
   planGoBtn.disabled = true;
   planGoBtn.textContent = "Planning…";
   planError.hidden = true;
-  const { data, error } = await planApi({ prompt });
+  const { data, error } = await planApi({ prompt, ...(preferredProvider ? { provider: preferredProvider } : {}) });
+  refreshUsage();
   planGoBtn.disabled = false;
   planGoBtn.textContent = "Plan the parts";
   if (error || !data || !data.ok) {
@@ -1731,7 +1804,14 @@ planBuildBtn.addEventListener("click", async () => {
     recordLog({ kind: "user", text: planned.prompt });
     setBusy(true, `Building ${planned.name}…`);
     const pending = addThinkingEntry("Generating…");
-    const { data } = await callApi("/api/generate", { prompt: planned.prompt, history: [], fit: fitSelect.value }, pending);
+    const genPayload = {
+      prompt: planned.prompt,
+      history: [],
+      fit: fitSelect.value,
+      ...(preferredProvider ? { provider: preferredProvider } : {}),
+    };
+    const { data } = await callApi("/api/generate", genPayload, pending);
+    refreshUsage();
     if (data && data.ok) {
       conversation.push({ role: "user", content: planned.prompt }, { role: "assistant", content: fence(data.code) });
       commitVersion(pending, `Built via ${data.provider_used}`, data, true);
