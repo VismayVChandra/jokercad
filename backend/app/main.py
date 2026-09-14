@@ -223,6 +223,13 @@ def _wants_organic(prompt: str) -> bool:
 # alone doesn't count: the usual mistake is calling a slice of the body "the flange".
 _FLANGE_SIZE_VAR = re.compile(r"^\w*flange\w*(diameter|radius|width|length|size)\w*\s*=", re.MULTILINE)
 
+# A top-level `motion = {...}` dict, in the same style as the clamp/gripper
+# examples. Required whenever the parts are meant to actually move: building
+# them as separate solids (children=) is only half the job — without this,
+# the app's Motion slider has nothing to animate and the assembly just sits
+# there looking like a static prop.
+_MOTION_DICT_VAR = re.compile(r"^motion\s*=", re.MULTILINE)
+
 # (does the prompt ask for it, does the code have it, what to tell the model if
 # not, what to tell the reviewer so it doesn't undo the feature)
 _FEATURE_CHECKS = [
@@ -244,14 +251,16 @@ _FEATURE_CHECKS = [
     ),
     (
         _wants_assembly,
-        lambda code: "children=" in code,
-        "This is a mechanism with moving parts, but the code builds it as one solid. Build each moving part "
-        "separately (the base, each arm or finger, a pin for each pivot), with every pivot's position in one "
-        "shared variable so the holes and pins line up, label each part, return "
-        "result = Compound(label=..., children=[...]), and describe how it moves in a motion dict, as in "
-        "the clamp example.",
+        lambda code: "children=" in code and bool(_MOTION_DICT_VAR.search(code)),
+        "This is a mechanism with moving parts, but the code either builds it as one solid, or builds separate "
+        "parts without describing how they move. Build each moving part separately (the base, each arm, "
+        "finger or blade, a pin for each pivot), with every pivot's position in one shared variable so the "
+        "holes and pins line up, label each part, return result = Compound(label=..., children=[...]), AND "
+        "add a top-level `motion = {...}` dict (the fixed part, a joint per moving part with its pivot and "
+        "drive, and the slider's range), as in the clamp example — every moving part needs its own joint in "
+        "it, or the app's Motion slider won't move that part.",
         "The design is an assembly on purpose: its moving parts are separate solids joined by pins through "
-        "aligned holes. Don't ask to fuse them.",
+        "aligned holes, driven by the motion dict. Don't ask to fuse them or drop the motion dict.",
     ),
     (
         _wants_organic,
