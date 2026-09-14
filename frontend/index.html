@@ -25,11 +25,45 @@
         <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
       </button>
     </div>
-    <div id="providerBadge" class="provider-badge" hidden>
-      <span class="provider-dot"></span>
-      <span class="provider-label"></span>
+    <div class="topbar-right">
+      <div id="providerBadge" class="provider-badge" hidden>
+        <span class="provider-dot"></span>
+        <span class="provider-label"></span>
+      </div>
+      <button type="button" id="accountBtn" class="project-btn account-btn" title="Sync your projects across devices" aria-haspopup="menu" aria-expanded="false" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6-1.8A4.5 4.5 0 0 0 6.5 19h11Z"/></svg>
+        <span id="accountLabel">Sync</span>
+      </button>
     </div>
   </header>
+
+  <div id="accountMenu" class="popover-menu account-menu" role="menu" hidden>
+    <div id="accountNotSetUp">
+      <p class="account-intro">Sync needs a free project at
+        <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a> — see the README for the
+        one-time setup (a few minutes, no coding).</p>
+      <form id="syncSetupForm">
+        <input id="syncUrlInput" type="url" placeholder="Project URL" required aria-label="Supabase project URL" />
+        <input id="syncKeyInput" type="text" placeholder="anon public key" required aria-label="Supabase anon key" />
+        <button type="submit" class="primary-btn">Save</button>
+      </form>
+      <p id="syncSetupStatus" class="account-status" hidden></p>
+    </div>
+    <div id="accountSignedOut" hidden>
+      <p class="account-intro">Sign in to keep your projects in sync across your devices.</p>
+      <form id="signInForm">
+        <input id="signInEmail" type="email" autocomplete="email" placeholder="you@example.com" required aria-label="Email address" />
+        <button type="submit" id="signInBtn" class="primary-btn">Send magic link</button>
+      </form>
+      <p id="signInStatus" class="account-status" hidden></p>
+      <button type="button" id="syncForgetBtn" class="text-btn">Use a different project</button>
+    </div>
+    <div id="accountSignedIn" hidden>
+      <p class="account-email" id="accountEmail"></p>
+      <p id="syncStatus" class="account-status"></p>
+      <button type="button" id="signOutBtn" class="text-btn">Sign out</button>
+    </div>
+  </div>
 
   <div id="viewerToolbar">
     <div class="view-group" role="group" aria-label="Camera view">
@@ -409,6 +443,8 @@
       }
     }
   </script>
+  <!-- Optional: only used when sync.js is given a project URL and key; see README. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -1888,6 +1888,92 @@ button {
   width: 270px;
 }
 
+/* ---------- account / sync ---------- */
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.account-btn.is-synced {
+  color: #a8ecce;
+  border-color: rgba(61, 220, 151, 0.35);
+}
+
+.account-menu {
+  width: 290px;
+  padding: 14px;
+}
+
+.account-intro {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.account-intro a {
+  color: var(--accent-hover);
+}
+
+#syncSetupForm,
+#signInForm {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+#syncSetupForm input,
+#signInForm input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+#syncSetupForm input:focus,
+#signInForm input:focus {
+  border-color: rgba(124, 108, 255, 0.55);
+}
+
+.account-status {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.account-status.is-error {
+  color: var(--error);
+}
+
+.account-status.is-ok {
+  color: #a8ecce;
+}
+
+.account-email {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#accountSignedOut .text-btn,
+#accountSignedIn .text-btn {
+  margin-top: 10px;
+  width: 100%;
+  text-align: center;
+}
+
 .menu-label {
   padding: 7px 10px 5px;
   font-size: 10.5px;

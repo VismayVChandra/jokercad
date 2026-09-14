@@ -103,6 +103,57 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   paper-thin shells crossing with no vertex inside either can rarely slip
   through undetected).
 
+## Syncing projects across devices (optional)
+
+Projects work entirely from this browser's own storage by default — nothing
+to set up. To also have them follow you to your phone or another computer,
+connect a free [Supabase](https://supabase.com) project (`frontend/sync.js`):
+until you do, the sync icon stays hidden and nothing changes.
+
+1. Create a free account at supabase.com and a new project (pick any name
+   and a database password — you won't need that password again here).
+2. Open its **SQL Editor** and run:
+
+   ```sql
+   create table if not exists public.projects (
+     id uuid primary key,
+     user_id uuid not null references auth.users(id) on delete cascade,
+     name text not null,
+     updated_at timestamptz not null default now(),
+     data jsonb not null
+   );
+
+   alter table public.projects enable row level security;
+
+   create policy "Users manage their own projects"
+     on public.projects
+     for all
+     using (auth.uid() = user_id)
+     with check (auth.uid() = user_id);
+
+   create index if not exists projects_user_id_idx on public.projects (user_id);
+   ```
+
+   Row Level Security is what actually keeps your data private — it's
+   enforced by the database itself, on every request, no matter what the
+   browser sends.
+3. Under **Authentication → URL Configuration**, add your site's URL to
+   **Redirect URLs** (`https://your-app.vercel.app/*`, and
+   `http://localhost:8000/*` too if you run it locally) — otherwise the
+   sign-in email's link won't be allowed to bring you back.
+4. Under **Project Settings → API**, copy the **Project URL** and the
+   **anon public** key. Unlike the AI provider keys, this key is *meant* to
+   be public — it's safe in a browser precisely because of the policy in
+   step 2 — so open jokercad, click the sync icon (top right), and paste them
+   in there.
+5. Click **Send magic link**, open the email, and you're signed in. Sign in
+   the same way on another device to see the same projects there.
+
+Projects still save to this browser first and always work offline; signing
+in on a second device merges by whichever project was saved most recently,
+so don't rely on it for editing the exact same project on two devices at
+once.
+
 ## Free by design
 
 - **Geometry**: `build123d` (OpenCascade) — open source.

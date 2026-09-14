@@ -10,6 +10,7 @@ import { bodyLabels, makeRig, moveTo } from "./motion.js";
 import { analyzePrint, bestOrientation, make3mf } from "./print.js";
 import { buildDrawing, buildDxf } from "./drawing.js";
 import { diffLines } from "./diff.js";
+import * as cloudSync from "./sync.js";
 
 const API_BASE = "";
 // Matches the server's MAX_HISTORY_MESSAGES; it would drop older turns anyway.
@@ -126,6 +127,22 @@ const compareStats = document.getElementById("compareStats");
 const compareDiff = document.getElementById("compareDiff");
 const compareRestoreABtn = document.getElementById("compareRestoreABtn");
 const compareRestoreBBtn = document.getElementById("compareRestoreBBtn");
+const accountBtn = document.getElementById("accountBtn");
+const accountMenu = document.getElementById("accountMenu");
+const accountNotSetUp = document.getElementById("accountNotSetUp");
+const accountSignedOut = document.getElementById("accountSignedOut");
+const accountSignedIn = document.getElementById("accountSignedIn");
+const syncSetupForm = document.getElementById("syncSetupForm");
+const syncUrlInput = document.getElementById("syncUrlInput");
+const syncKeyInput = document.getElementById("syncKeyInput");
+const syncSetupStatus = document.getElementById("syncSetupStatus");
+const syncForgetBtn = document.getElementById("syncForgetBtn");
+const signInForm = document.getElementById("signInForm");
+const signInEmail = document.getElementById("signInEmail");
+const signInStatus = document.getElementById("signInStatus");
+const accountEmail = document.getElementById("accountEmail");
+const syncStatusEl = document.getElementById("syncStatus");
+const signOutBtn = document.getElementById("signOutBtn");
 const jointsSection = document.getElementById("jointsSection");
 const asmJointList = document.getElementById("asmJointList");
 const addPivotBtn = document.getElementById("addPivotBtn");
@@ -2551,6 +2568,9 @@ async function saveProject(p) {
     if (!storageWarned) showToast("This browser didn't save the project. Export it to keep a copy.");
     storageWarned = true;
   }
+  // The local save above always happens first and independently: if sync is
+  // off, unreachable, or fails, the project is still safe in this browser.
+  pushToCloud(p);
 }
 
 window.addEventListener("pagehide", flushSave);
@@ -2808,6 +2828,7 @@ const PROJECT_ACTIONS = {
     try {
       await dbRequest("readwrite", (store) => store.delete(doomed.id));
     } catch {}
+    cloudSync.deleteProject(doomed.id).catch(() => {});
     if (!projects.length) projects.push(newProject("My first project"));
     openProject(mostRecentProject());
     scheduleSave();
@@ -2845,6 +2866,151 @@ importInput.addEventListener("change", async () => {
     showToast(`Couldn't import that file: ${err.message}`);
   }
 });
+
+/* ---------------- cloud sync ---------------- */
+// Entirely optional (see README): with no Supabase project connected, every
+// function in sync.js is a no-op, accountBtn stays hidden, and the app works
+// exactly as it does with only this browser's local storage.
+
+let wasSignedIn = false;
+
+function initCloudSync() {
+  cloudSync.onChange(({ configured, user }) => {
+    accountBtn.hidden = !configured;
+    if (!configured) return;
+    accountEmail.textContent = user ? user.email : "";
+    accountNotSetUp.hidden = true;
+    accountSignedOut.hidden = Boolean(user);
+    accountSignedIn.hidden = !user;
+    if (user && !wasSignedIn) {
+      wasSignedIn = true;
+      mergeCloudProjects();
+    } else if (!user) {
+      wasSignedIn = false;
+    }
+  });
+  cloudSync.init();
+}
+
+function setAccountMenu(open) {
+  accountMenu.hidden = !open;
+  accountBtn.setAttribute("aria-expanded", String(open));
+  if (!open) return;
+  const configured = cloudSync.isConfigured();
+  accountNotSetUp.hidden = configured;
+  accountSignedOut.hidden = !configured || Boolean(cloudSync.currentUserOrNull());
+  accountSignedIn.hidden = !configured || !cloudSync.currentUserOrNull();
+  if (cloudSync.currentUserOrNull()) syncStatusEl.textContent = "Up to date";
+  const r = accountBtn.getBoundingClientRect();
+  const width = accountMenu.offsetWidth;
+  accountMenu.style.top = `${r.bottom + 8}px`;
+  accountMenu.style.left = `${Math.max(12, Math.min(r.right - width, window.innerWidth - width - 12))}px`;
+  (configured ? (cloudSync.currentUserOrNull() ? signOutBtn : signInEmail) : syncUrlInput).focus();
+}
+
+accountBtn.addEventListener("click", () => setAccountMenu(accountMenu.hidden));
+document.addEventListener("pointerdown", (e) => {
+  if (!accountMenu.hidden && !accountMenu.contains(e.target) && !accountBtn.contains(e.target)) setAccountMenu(false);
+});
+
+function setStatus(el, text, kind) {
+  el.textContent = text;
+  el.hidden = !text;
+  el.className = `account-status${kind ? ` is-${kind}` : ""}`;
+}
+
+syncSetupForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  try {
+    cloudSync.setup(syncUrlInput.value, syncKeyInput.value);
+    syncUrlInput.value = syncKeyInput.value = "";
+    setStatus(syncSetupStatus, "", null);
+  } catch (err) {
+    setStatus(syncSetupStatus, err.message, "error");
+  }
+});
+
+syncForgetBtn.addEventListener("click", () => {
+  if (window.confirm("Stop syncing and forget this Supabase project? Your projects stay right here in this browser.")) {
+    cloudSync.forget();
+  }
+});
+
+signInForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const email = signInEmail.value.trim();
+  if (!email) return;
+  const button = document.getElementById("signInBtn");
+  button.disabled = true;
+  try {
+    await cloudSync.signInWithEmail(email);
+    setStatus(signInStatus, `Check ${email} for a sign-in link.`, "ok");
+  } catch (err) {
+    setStatus(signInStatus, err.message || String(err), "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+signOutBtn.addEventListener("click", () => cloudSync.signOut());
+
+// A project as a JSON-safe row (GLBs base64-encoded), for the cloud table.
+function projectToRow(p) {
+  const data = serializeProject(p);
+  data.parts.forEach((part) => part.versions.forEach((v) => (v.glbBytes = bytesToBase64(v.glbBytes))));
+  return data;
+}
+
+// The reverse: a cloud row back into a hydrated project.
+function rowToProject(row) {
+  const data = row.data;
+  const parts = (data.parts || []).map((part) => ({
+    ...part,
+    versions: (part.versions || []).map((v) => ({ ...v, glbBytes: base64ToBytes(v.glbBytes) })),
+  }));
+  return hydrateProject({ ...data, parts });
+}
+
+async function pushToCloud(p) {
+  if (!cloudSync.isConfigured() || !cloudSync.currentUserOrNull()) return;
+  try {
+    await cloudSync.pushProject(p.id, p.name, p.updatedAt, projectToRow(p));
+    if (!accountMenu.hidden) setStatus(syncStatusEl, "Up to date", null);
+  } catch (err) {
+    if (!accountMenu.hidden) setStatus(syncStatusEl, `Couldn't sync: ${err.message || err}`, "error");
+  }
+}
+
+// Runs once right after signing in: pulls in anything newer in the cloud,
+// pushes up anything newer (or only) here. Ties (equal timestamps) are left
+// alone. Editing the same project on two devices at the same moment isn't
+// merged field-by-field — whichever side saved most recently wins outright.
+async function mergeCloudProjects() {
+  let rows;
+  try {
+    rows = await cloudSync.pullProjects();
+  } catch (err) {
+    showToast(`Couldn't reach sync: ${err.message || err}`);
+    return;
+  }
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  for (const row of rows) {
+    const local = projects.find((p) => p.id === row.id);
+    if (local && local.updatedAt >= row.updatedAt) continue;
+    const hydrated = rowToProject(row);
+    const index = projects.findIndex((p) => p.id === row.id);
+    if (index >= 0) projects[index] = hydrated;
+    else projects.push(hydrated);
+    await dbRequest("readwrite", (store) => store.put(serializeProject(hydrated))).catch(() => {});
+    if (project && project.id === row.id) openProject(hydrated);
+  }
+  for (const p of projects) {
+    const row = byId.get(p.id);
+    if (!row || p.updatedAt > row.updatedAt) await pushToCloud(p);
+  }
+  if (project) renderPartTabs();
+  showToast("Synced your projects.");
+}
 
 /* ---------------- assembly ---------------- */
 
@@ -3987,6 +4153,7 @@ document.addEventListener("keydown", (e) => {
     else if (!editPopup.hidden) closeEditPopup();
     else if (!exportMenu.hidden) setExportMenu(false);
     else if (!projectMenu.hidden) setProjectMenu(false);
+    else if (!accountMenu.hidden) setAccountMenu(false);
     else if (codeDrawer.classList.contains("is-open")) setCodeDrawer(false);
     else if (assembly.mating) setMating(false);
     else if (assembly.jointing) cancelJointing();
@@ -4023,6 +4190,7 @@ document.addEventListener("keydown", (e) => {
 
 input.focus();
 initAccess();
+initCloudSync();
 initProjects().then(() => {
   offerSharedPart();
   // A share link pasted into a tab that's already open only changes the hash.
