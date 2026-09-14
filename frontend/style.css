@@ -1017,6 +1017,105 @@ button {
   color: var(--text);
 }
 
+/* ---------- compare versions ---------- */
+
+.compare-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+
+.compare-picks label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compare-swatch {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.compare-a {
+  background: #5b9bff;
+  box-shadow: 0 0 7px rgba(91, 155, 255, 0.6);
+}
+
+.compare-b {
+  background: #ffa94d;
+  box-shadow: 0 0 7px rgba(255, 169, 77, 0.6);
+}
+
+.compare-picks select {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.compare-picks select option {
+  background: var(--surface-solid);
+}
+
+.compare-stats {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+  gap: 3px 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+
+.compare-stats .stat-label {
+  color: var(--text-faint);
+  font-family: "Inter", sans-serif;
+}
+
+.compare-stats .stat-changed {
+  color: #ffe08a;
+}
+
+.compare-diff {
+  max-height: 220px;
+  margin-top: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-same {
+  color: var(--text-faint);
+}
+
+.diff-remove {
+  color: #ff9fac;
+  background: rgba(255, 107, 129, 0.1);
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 107, 129, 0.55);
+}
+
+.diff-add {
+  color: #ffd08a;
+  background: rgba(255, 169, 77, 0.1);
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 169, 77, 0.55);
+}
+
 /* ---------- print check ---------- */
 
 .print-settings {

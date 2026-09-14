@@ -589,3 +589,34 @@ export function buildDrawing(root, info) {
     "</svg>";
   return { svg, holes, scale };
 }
+
+/**
+ * A DXF (R12/AC1009, millimetres) of the outline seen from one view — for
+ * laser- or CNC-cutting a flat or mostly-flat part. Only the visible lines
+ * from that view go in (no hidden lines, no dimensions): the outer profile
+ * plus any holes or slots that show as closed loops from that direction.
+ * info: { renderer, view: "top" | "front" | "right" } (default "top", the
+ * usual way a flat part sits for cutting).
+ */
+export function buildDxf(root, info) {
+  const mesh = weld(root);
+  const topo = topology(mesh);
+  const edges = sortEdges(topo);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(mesh.triangles, 1));
+
+  const view = VIEWS[info.view] || VIEWS.top;
+  const { box, visible } = traceView(info.renderer, mesh, geometry, topo, edges, view, false);
+  geometry.dispose();
+  if (!visible.length) throw new Error("Nothing is visible from that side — try a different view.");
+
+  const d = (v) => (Math.round(v * 1000) / 1000).toString();
+  const entities = visible
+    .map(([x0, y0, x1, y1]) => `0\nLINE\n8\n0\n10\n${d(x0)}\n20\n${d(y0)}\n30\n0\n11\n${d(x1)}\n21\n${d(y1)}\n31\n0\n`)
+    .join("");
+  const dxf =
+    "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n" + // 4 = millimetres
+    `0\nSECTION\n2\nENTITIES\n${entities}0\nENDSEC\n0\nEOF\n`;
+  return { dxf, size: [box.width, box.height], segments: visible.length };
+}

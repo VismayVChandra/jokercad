@@ -5,9 +5,11 @@ import { STLExporter } from "three/addons/exporters/STLExporter.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+import { OBJExporter } from "three/addons/exporters/OBJExporter.js";
 import { bodyLabels, makeRig, moveTo } from "./motion.js";
 import { analyzePrint, bestOrientation, make3mf } from "./print.js";
-import { buildDrawing } from "./drawing.js";
+import { buildDrawing, buildDxf } from "./drawing.js";
+import { diffLines } from "./diff.js";
 
 const API_BASE = "";
 // Matches the server's MAX_HISTORY_MESSAGES; it would drop older turns anyway.
@@ -115,6 +117,15 @@ const drawingSheet = document.getElementById("drawingSheet");
 const drawingSvgBtn = document.getElementById("drawingSvgBtn");
 const drawingPdfBtn = document.getElementById("drawingPdfBtn");
 const drawingCloseBtn = document.getElementById("drawingCloseBtn");
+const compareBtn = document.getElementById("compareBtn");
+const compareCard = document.getElementById("compareCard");
+const compareCloseBtn = document.getElementById("compareCloseBtn");
+const compareASelect = document.getElementById("compareASelect");
+const compareBSelect = document.getElementById("compareBSelect");
+const compareStats = document.getElementById("compareStats");
+const compareDiff = document.getElementById("compareDiff");
+const compareRestoreABtn = document.getElementById("compareRestoreABtn");
+const compareRestoreBBtn = document.getElementById("compareRestoreBBtn");
 const jointsSection = document.getElementById("jointsSection");
 const asmJointList = document.getElementById("asmJointList");
 const addPivotBtn = document.getElementById("addPivotBtn");
@@ -441,6 +452,7 @@ function clearViewer() {
   resetMotion();
   setPrintMode(false);
   setPicking(false);
+  setCompareMode(false);
   setSection(false);
   setMeasuring(false);
   removeCurrentObject();
@@ -609,6 +621,7 @@ function decorateVersionEntry(entryEl, index) {
 }
 
 function showVersion(index, reframe) {
+  setCompareMode(false);
   activeVersion = index;
   activePart.activeVersion = index;
   scheduleSave();
@@ -617,6 +630,7 @@ function showVersion(index, reframe) {
   currentCode = version.code;
   codeView.textContent = version.code;
   modelTools.forEach((btn) => (btn.disabled = false));
+  compareBtn.disabled = versions.length < 2; // nothing to compare with just one version
   renderParams(version.code);
   loadModel(version.glbBytes, reframe, version.parts, version.motion);
   if (narrowScreen.matches) setPanelCollapsed(true);
@@ -1034,6 +1048,7 @@ function updateSectionPlane() {
 }
 
 function setSection(on) {
+  if (on && compareState.on) setCompareMode(false);
   section.on = on && Boolean(currentModel);
   const planes = section.on ? [sectionPlane] : null;
   for (const material of [modelMaterial, edgeMaterial, capMaterial, ...partMaterials]) {
@@ -1170,6 +1185,7 @@ function clearRuler() {
 function setMeasuring(on) {
   if (on && assembly.mating) setMating(false);
   if (on) setPicking(false);
+  if (on && compareState.on) setCompareMode(false);
   ruler.on = on && Boolean(currentModel);
   measureBtn.classList.toggle("active", ruler.on);
   renderer.domElement.style.cursor = ruler.on ? "crosshair" : "";
@@ -1258,14 +1274,37 @@ const EXPORTERS = {
     const version = versions[activeVersion];
     if (version) downloadBlob(new Blob([version.glbBytes], { type: "model/gltf-binary" }), `${exportName()}.glb`);
   },
+  obj: () => {
+    const obj = withExplodedOff(() => new OBJExporter().parse(exportRoot()));
+    downloadBlob(new Blob([obj], { type: "text/plain" }), `${exportName()}.obj`);
+  },
+  dxf: () => {
+    try {
+      const info = withExplodedOff(() => buildDxf(exportRoot(), { renderer, view: currentViewName() }));
+      downloadBlob(new Blob([info.dxf], { type: "application/dxf" }), `${exportName()}.dxf`);
+    } catch (err) {
+      showToast(err.message);
+    }
+  },
   png: exportPng,
 };
+
+// Whichever camera view button is active (Iso/Top/Front/Right), for DXF's
+// "cut from this side" default; a free-orbited view or Iso falls back to Top,
+// the usual way a flat part sits for cutting.
+function currentViewName() {
+  const active = viewButtons.find((btn) => btn.classList.contains("active"));
+  const name = active ? active.dataset.view : "top";
+  return name === "iso" ? "top" : name;
+}
 
 function setExportMenu(open) {
   exportMenu.hidden = !open;
   exportBtn.setAttribute("aria-expanded", String(open));
   exportBtn.classList.toggle("active", open);
   if (!open) return;
+  // Exports the active version as shown normally, not the comparison overlay.
+  if (compareState.on) setCompareMode(false);
   // STEP is rebuilt from a part's code; an assembly has no single script.
   exportMenu.querySelector('[data-format="step"]').hidden = assembly.on;
   // Positioned by hand: inside the toolbar it would be clipped when the
@@ -1490,6 +1529,7 @@ function setPicking(on) {
   if (picker.on) {
     setMeasuring(false);
     setPrintMode(false);
+    if (compareState.on) setCompareMode(false);
   }
   editBtn.classList.toggle("active", picker.on);
   renderer.domElement.style.cursor = picker.on ? "crosshair" : ruler.on ? "crosshair" : "";
@@ -1849,6 +1889,7 @@ function setPrintMode(on) {
   printCard.hidden = !on;
   if (on) {
     setPicking(false);
+    if (compareState.on) setCompareMode(false);
     // The check is for the part as designed, not part-way through its motion.
     if (motion.rig) {
       stopMotion(false);
@@ -2119,6 +2160,159 @@ drawingCloseBtn.addEventListener("click", () => (drawingModal.hidden = true));
 drawingModal.addEventListener("click", (e) => {
   if (e.target === drawingModal) drawingModal.hidden = true;
 });
+
+/* ---------------- compare versions ---------------- */
+
+const compareState = { on: false, groupA: null, groupB: null };
+const compareMaterialA = new THREE.MeshStandardMaterial({
+  color: 0x5b9bff, transparent: true, opacity: 0.55, metalness: 0.2, roughness: 0.5, depthWrite: false,
+});
+const compareMaterialB = new THREE.MeshStandardMaterial({
+  color: 0xffa94d, transparent: true, opacity: 0.55, metalness: 0.2, roughness: 0.5, depthWrite: false,
+});
+
+function setCompareMode(on) {
+  on = on && Boolean(currentModel) && !assembly.on && versions.length > 1;
+  if (on === compareState.on) return;
+  compareState.on = on;
+  compareBtn.classList.toggle("active", on);
+  compareCard.hidden = !on;
+  if (on) {
+    setPicking(false);
+    setPrintMode(false);
+    setMeasuring(false);
+    setSection(false);
+    if (motion.rig) {
+      stopMotion(false);
+      motionCard.hidden = true;
+    }
+    currentModel.visible = false;
+    if (edgeGroup) edgeGroup.visible = false;
+    if (capGroup) capGroup.visible = false;
+    populateCompareSelects();
+    renderCompare();
+  } else {
+    clearCompareGroups();
+    applyWireframeState(); // restores currentModel/edgeGroup/capGroup visibility
+    if (motion.rig) motionCard.hidden = false;
+  }
+}
+
+compareBtn.addEventListener("click", () => setCompareMode(!compareState.on));
+compareCloseBtn.addEventListener("click", () => setCompareMode(false));
+
+function populateCompareSelects() {
+  const options = versions.map((_, i) => `<option value="${i}">v${i + 1}</option>`).join("");
+  compareASelect.innerHTML = options;
+  compareBSelect.innerHTML = options;
+  // Defaults to the two most recent versions: "what did the last change do".
+  compareASelect.value = String(Math.max(0, versions.length - 2));
+  compareBSelect.value = String(versions.length - 1);
+}
+
+function clearCompareGroups() {
+  if (compareState.groupA) scene.remove(compareState.groupA);
+  if (compareState.groupB) scene.remove(compareState.groupB);
+  compareState.groupA = compareState.groupB = null;
+}
+
+// The parsed model of one of the active part's own versions, cached the same
+// way partScene() caches an assembly instance's.
+function loadVersionModel(index) {
+  const version = versions[index];
+  version.scene ||= new Promise((resolve, reject) =>
+    loader.parse(version.glbBytes.slice().buffer, "", (gltf) => resolve(gltf.scene), reject)
+  );
+  return version.scene;
+}
+
+// A coloured, translucent copy of a version's model, resting on the grid and
+// centred on the origin — the same anchor for every version compared, so a
+// local change stays visually aligned with the rest of the part.
+function buildCompareGroup(sourceScene, material) {
+  const model = sourceScene.clone();
+  model.scale.setScalar(1000);
+  model.traverse((o) => o.isMesh && (o.material = material));
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.set(-center.x, -box.min.y, -center.z);
+  const wrapper = new THREE.Group();
+  wrapper.add(model);
+  return wrapper;
+}
+
+async function renderCompare() {
+  if (!compareState.on) return;
+  const a = Number(compareASelect.value);
+  const b = Number(compareBSelect.value);
+  const token = ++displayToken;
+  let sceneA, sceneB;
+  try {
+    [sceneA, sceneB] = await Promise.all([loadVersionModel(a), loadVersionModel(b)]);
+  } catch (err) {
+    showToast(`Couldn't load a version to compare: ${err.message || err}`);
+    return;
+  }
+  if (token !== displayToken || !compareState.on) return;
+
+  clearCompareGroups();
+  compareState.groupA = buildCompareGroup(sceneA, compareMaterialA);
+  compareState.groupB = buildCompareGroup(sceneB, compareMaterialB);
+  scene.add(compareState.groupA, compareState.groupB);
+
+  const box = new THREE.Box3().setFromObject(compareState.groupA).union(new THREE.Box3().setFromObject(compareState.groupB));
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 1);
+  lastFrame = { dist: maxDim * 2.1, midY: size.y / 2 };
+  grid.scale.setScalar(Math.max(maxDim / 60, 0.06));
+  setView("iso");
+
+  renderCompareStats(compareState.groupA, compareState.groupB);
+  renderCompareDiff(versions[a].code, versions[b].code);
+}
+
+compareASelect.addEventListener("change", renderCompare);
+compareBSelect.addEventListener("change", renderCompare);
+compareRestoreABtn.addEventListener("click", () => showVersion(Number(compareASelect.value), true));
+compareRestoreBBtn.addEventListener("click", () => showVersion(Number(compareBSelect.value), true));
+
+function renderCompareStats(groupA, groupB) {
+  const mA = measure(groupA);
+  const mB = measure(groupB);
+  // Swapped to match the app's usual X x Y x Z (build123d, Z up) labelling,
+  // since these groups are still in the viewer's own Y-up frame.
+  const sizeStr = (m) => `${m.size.x.toFixed(1)} × ${m.size.z.toFixed(1)} × ${m.size.y.toFixed(1)} mm`;
+  const volStr = (m) => (m.volume >= 1000 ? `${(m.volume / 1000).toFixed(2)} cm³` : `${m.volume.toFixed(0)} mm³`);
+  const cell = (text, changed) => {
+    const span = document.createElement("span");
+    if (changed) span.className = "stat-changed";
+    span.textContent = text;
+    return span;
+  };
+  const label = (text) => {
+    const span = document.createElement("span");
+    span.className = "stat-label";
+    span.textContent = text;
+    return span;
+  };
+  const sizeChanged = sizeStr(mA) !== sizeStr(mB);
+  const volChanged = Math.abs(mA.volume - mB.volume) > 0.5;
+  compareStats.replaceChildren(
+    label("Size"), cell(sizeStr(mA), sizeChanged), cell(sizeStr(mB), sizeChanged),
+    label("Volume"), cell(volStr(mA), volChanged), cell(volStr(mB), volChanged)
+  );
+}
+
+function renderCompareDiff(codeA, codeB) {
+  const frag = document.createDocumentFragment();
+  for (const op of diffLines(codeA, codeB)) {
+    const line = document.createElement("div");
+    line.className = `diff-${op.type}`;
+    line.textContent = op.line || " ";
+    frag.append(line);
+  }
+  compareDiff.replaceChildren(frag);
+}
 
 /* ---------------- motion ---------------- */
 
@@ -2719,6 +2913,7 @@ async function enterAssembly() {
   resetMotion();
   setPrintMode(false);
   setPicking(false);
+  setCompareMode(false);
   assembly.on = true;
   assembly.explode = 0;
   explodeSlider.value = "0";
@@ -2785,7 +2980,7 @@ async function rebuildAssembly(reframe) {
   modelTools.forEach((btn) => (btn.disabled = !root.children.length));
   shareBtn.disabled = true;
   // Part-only tools: they work on one part's code.
-  editBtn.disabled = printBtn.disabled = organicBtn.disabled = true;
+  editBtn.disabled = printBtn.disabled = organicBtn.disabled = compareBtn.disabled = true;
   paramsCard.hidden = true;
   partsCard.hidden = true;
   applyJoints();
@@ -3797,6 +3992,7 @@ document.addEventListener("keydown", (e) => {
     else if (assembly.jointing) cancelJointing();
     else if (picker.on) setPicking(false);
     else if (printState.on) setPrintMode(false);
+    else if (compareState.on) setCompareMode(false);
     else if (ruler.on) setMeasuring(false);
     else if (section.on) setSection(false);
     else if (assembly.selected) selectInstance(null);
@@ -3817,6 +4013,7 @@ document.addEventListener("keydown", (e) => {
   else if (key === "m") setMeasuring(!ruler.on);
   else if (key === "e" && !assembly.on) setPicking(!picker.on);
   else if (key === "p" && !assembly.on) setPrintMode(!printState.on);
+  else if (key === "c" && !assembly.on) setCompareMode(!compareState.on);
   else if (assembly.on && key === "g") setTransformMode("translate");
   else if (assembly.on && key === "r") setTransformMode("rotate");
   else if (assembly.on && assembly.selected && (key === "delete" || key === "backspace")) removeInstance(assembly.selected);

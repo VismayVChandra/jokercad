@@ -20,6 +20,10 @@ Without Gemini, a text-only check of the code and measurements runs instead.
 - **Edit dimensions by hand**: every size the code exposes shows up as a
   parameter; changing one rebuilds the part without an AI call.
 - **Version history**: click any earlier ✓ to go back to it.
+- **Compare versions** (`C`): overlays any two versions in the viewer (blue,
+  orange, translucent) so a changed feature is easy to spot, next to a
+  line-by-line diff of the code and a size/volume readout, with **Restore A**
+  / **Restore B** buttons (`frontend/diff.js` for the diff itself).
 - **From a photo or sketch**: attach a picture (📎, paste, or drop it on the
   chat). It's shrunk in the browser and sent to Gemini, which builds what it
   shows; the review compares the result with both the picture and a render.
@@ -42,6 +46,10 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   clearance and tap holes, counterbores, heat-set insert holes, nut traps and
   common ball bearings, plus coil springs, as helpers the model calls
   (`backend/app/cad/parts_library.py`).
+- **More export formats**: **OBJ** (Export menu) for Blender, Maya and most
+  3D apps, and **DXF** for laser or CNC cutting — the outline visible from
+  whichever camera view is active (Top by default), as plain line entities in
+  millimetres.
 - **Fit** (under the chat box): press, sliding or loose, for printed or
   machined parts. Every prompt tells the model the clearance to use between
   holes and what goes in them, kept as an editable `clearance` parameter.

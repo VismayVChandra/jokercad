@@ -59,6 +59,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v7H6z"/></svg>
       <span>Print</span>
     </button>
+    <button type="button" id="compareBtn" class="tool-btn model-tool" title="Compare two versions: overlaid in 3D, side by side in code (C)" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="13" height="13" rx="2"/><rect x="8.5" y="3" width="13" height="13" rx="2"/></svg>
+      <span>Compare</span>
+    </button>
     <button type="button" id="wireframeBtn" class="tool-btn" title="Toggle wireframe (W)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.5 12 3l10 5.5-10 5.5L2 8.5Z"/><path d="M2 8.5v7L12 21l10-5.5v-7"/><path d="M12 14v7"/></svg>
     </button>
@@ -89,8 +93,14 @@
     <button type="button" class="menu-item" role="menuitem" data-format="glb">
       <span class="menu-format">GLB</span><span class="menu-desc">Web, Blender and 3D apps</span>
     </button>
+    <button type="button" class="menu-item" role="menuitem" data-format="obj">
+      <span class="menu-format">OBJ</span><span class="menu-desc">Blender, Maya, most 3D apps</span>
+    </button>
     <button type="button" class="menu-item" role="menuitem" data-format="drawing">
       <span class="menu-format">PDF</span><span class="menu-desc">Engineering drawing: views, sizes, holes</span>
+    </button>
+    <button type="button" class="menu-item" role="menuitem" data-format="dxf">
+      <span class="menu-format">DXF</span><span class="menu-desc">Flat outline for laser or CNC cutting</span>
     </button>
     <button type="button" class="menu-item" role="menuitem" data-format="png">
       <span class="menu-format">PNG</span><span class="menu-desc">Image of the current view</span>
@@ -142,6 +152,25 @@
   <p id="viewerHint">Drag to orbit · Scroll to zoom · Right-drag to pan</p>
 
   <div id="inspector">
+    <section id="compareCard" class="side-card" hidden>
+      <div class="params-header">
+        <span class="params-title">Compare versions</span>
+        <button type="button" id="compareCloseBtn" class="icon-btn" title="Close (C)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="compare-picks">
+        <label><span class="compare-swatch compare-a"></span><select id="compareASelect"></select></label>
+        <label><span class="compare-swatch compare-b"></span><select id="compareBSelect"></select></label>
+      </div>
+      <div id="compareStats" class="compare-stats"></div>
+      <div class="asm-actions">
+        <button type="button" id="compareRestoreABtn" class="text-btn">Restore A</button>
+        <button type="button" id="compareRestoreBBtn" class="text-btn">Restore B</button>
+      </div>
+      <div id="compareDiff" class="compare-diff"></div>
+      <p class="params-hint">Blue is A, orange is B, overlaid in the viewer. Lines only in A are struck through; lines only in B are underlined.</p>
+    </section>
     <section id="printCard" class="side-card" hidden>
       <div class="params-header">
         <span class="params-title">3D print check</span>
