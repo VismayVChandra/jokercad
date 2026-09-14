@@ -2476,7 +2476,14 @@ function renderPartTabs() {
   asmTab.title = "Put this project's parts together";
   asmTab.innerHTML = `${ICON_ASSEMBLY}<span>Assembly</span>`;
   asmTab.addEventListener("click", () => enterAssembly());
-  partTabs.append(asmTab);
+
+  const addTab = document.createElement("button");
+  addTab.type = "button";
+  addTab.className = "part-tab tab-add";
+  addTab.title = "Start a new part in this project";
+  addTab.textContent = "+ New part";
+  addTab.addEventListener("click", () => !busy && selectPart(addPart()));
+  partTabs.append(asmTab, addTab);
 
   for (const part of project.parts) {
     const tab = document.createElement("button");
@@ -2502,15 +2509,8 @@ function renderPartTabs() {
     tab.addEventListener("click", () => !current && selectPart(part));
     tab.addEventListener("dblclick", () => renamePart(part));
     partTabs.append(tab);
+    if (current) requestAnimationFrame(() => tab.scrollIntoView({ block: "nearest" }));
   }
-
-  const addTab = document.createElement("button");
-  addTab.type = "button";
-  addTab.className = "part-tab tab-add";
-  addTab.title = "New part";
-  addTab.textContent = "+";
-  addTab.addEventListener("click", () => !busy && selectPart(addPart()));
-  partTabs.append(addTab);
 }
 
 function setProjectMenu(open) {

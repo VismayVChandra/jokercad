@@ -1867,19 +1867,18 @@ button {
 
 /* ---------- part tabs ---------- */
 
+/* Tabs wrap onto new rows, so every part stays in reach; past three rows
+   the strip scrolls up and down. */
 .part-tabs {
   display: flex;
   flex-shrink: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  max-height: 110px;
   padding: 10px 12px 9px;
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.part-tabs::-webkit-scrollbar {
-  display: none;
+  overflow-y: auto;
 }
 
 .part-tabs.is-busy {
@@ -1940,10 +1939,8 @@ button {
 }
 
 .tab-add {
-  justify-content: center;
-  width: 28px;
-  padding: 0;
-  font-size: 16px;
+  border-color: rgba(124, 108, 255, 0.35);
+  color: var(--accent-hover);
 }
 
 .tab-assembly {
