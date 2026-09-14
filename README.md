@@ -79,6 +79,21 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   snapped to the ring around a hole lands centred over it. `Ctrl+Z` undoes
   moves. The assembly always uses each part's current version, and exports as
   STL, GLB or PNG.
+- **Joints**: **+ Pivot joint** — click a round hole or pin on one part, then
+  the matching one on another, and a hinge is added between them, driven by a
+  slider. **+ Slide joint** — click the two parts, then pick a direction. The
+  first part clicked stays fixed; dragging it carries its jointed parts along
+  (forward kinematics down a tree of joints — not a closed-loop linkage
+  solver, so joints can't form a loop). Each joint's slider and the part it
+  drives are saved with the project.
+- **Explode view**: a slider that pulls the assembly's parts apart along the
+  line from the assembly's centre to each part's own centre, to see how they
+  fit — purely visual, so it never changes a part's saved position and is
+  automatically turned off for exports.
+- **Overlap check**: parts that overlap another part turn red, checked after
+  every move, joint change, or explode change (a vertex-in-mesh test, so two
+  paper-thin shells crossing with no vertex inside either can rarely slip
+  through undetected).
 
 ## Free by design
 

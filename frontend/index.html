@@ -270,6 +270,28 @@
         <div class="asm-heading">In the assembly</div>
         <div id="asmInstanceList" class="asm-list"></div>
       </div>
+      <div id="jointsSection" hidden>
+        <div class="asm-heading">Joints <span class="asm-sub">drag one part, its jointed parts follow</span></div>
+        <div id="asmJointList" class="asm-list"></div>
+        <div class="asm-actions">
+          <button type="button" id="addPivotBtn" class="text-btn" title="Click a round hole or pin on one part, then the matching one on another">+ Pivot joint</button>
+          <button type="button" id="addSlideBtn" class="text-btn" title="Click one part, then another, then pick a direction">+ Slide joint</button>
+        </div>
+        <div id="jointAxisPicker" class="seg" role="group" aria-label="Slide direction" hidden>
+          <span class="asm-label">Direction</span>
+          <button type="button" class="seg-btn" data-joint-axis="x">X</button>
+          <button type="button" class="seg-btn" data-joint-axis="y">Y</button>
+          <button type="button" class="seg-btn" data-joint-axis="z">Z</button>
+        </div>
+      </div>
+      <div id="explodeSection" hidden>
+        <div class="asm-heading">Explode view <span class="asm-sub">pull parts apart to see how they fit</span></div>
+        <div class="motion-row">
+          <input id="explodeSlider" type="range" min="0" max="150" value="0" aria-label="Explode amount" />
+          <span id="explodeValue" class="motion-value">0 mm</span>
+        </div>
+      </div>
+      <p id="collisionWarning" class="asm-collision-warning" hidden>⚠ Parts overlap where highlighted in red.</p>
       <div id="asmSelection" hidden>
         <div class="asm-heading">Selected <span id="asmSelName" class="asm-sub"></span></div>
         <div class="seg" role="group" aria-label="Handle">
@@ -298,6 +320,7 @@
         <button type="button" id="undoMoveBtn" class="text-btn" disabled title="Undo the last move (Ctrl+Z)">Undo move</button>
       </div>
       <p class="asm-hint">Click a part to select it, then drag its arrows or rings, or type a position. To snap, click a flat face on the part to move, then the face it should sit against. Snapping a pin's end to the ring around a hole centres it over the hole.</p>
+      <p id="jointHint" class="asm-hint" hidden></p>
     </div>
   </aside>
 

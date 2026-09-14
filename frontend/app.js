@@ -115,6 +115,16 @@ const drawingSheet = document.getElementById("drawingSheet");
 const drawingSvgBtn = document.getElementById("drawingSvgBtn");
 const drawingPdfBtn = document.getElementById("drawingPdfBtn");
 const drawingCloseBtn = document.getElementById("drawingCloseBtn");
+const jointsSection = document.getElementById("jointsSection");
+const asmJointList = document.getElementById("asmJointList");
+const addPivotBtn = document.getElementById("addPivotBtn");
+const addSlideBtn = document.getElementById("addSlideBtn");
+const jointAxisPicker = document.getElementById("jointAxisPicker");
+const jointHint = document.getElementById("jointHint");
+const explodeSection = document.getElementById("explodeSection");
+const explodeSlider = document.getElementById("explodeSlider");
+const explodeValue = document.getElementById("explodeValue");
+const collisionWarning = document.getElementById("collisionWarning");
 
 const narrowScreen = window.matchMedia("(max-width: 900px)");
 
@@ -1219,7 +1229,7 @@ function exportPng() {
   const helpers = [grid, rulerGroup, transformHelper, mateGroup];
   const shown = helpers.map((helper) => helper.visible);
   helpers.forEach((helper) => (helper.visible = false));
-  renderer.render(scene, camera);
+  withExplodedOff(() => renderer.render(scene, camera));
   // Read straight after rendering, before the browser clears the canvas.
   const url = renderer.domElement.toDataURL("image/png");
   helpers.forEach((helper, i) => (helper.visible = shown[i]));
@@ -1230,16 +1240,18 @@ const EXPORTERS = {
   step: exportStep,
   drawing: openDrawing,
   stl: () => {
-    const stl = new STLExporter().parse(exportRoot(), { binary: true });
+    const stl = withExplodedOff(() => new STLExporter().parse(exportRoot(), { binary: true }));
     downloadBlob(new Blob([stl], { type: "model/stl" }), `${exportName()}.stl`);
   },
   glb: async () => {
     if (assembly.on) {
       // Written from the viewer's scene, in metres like any glTF.
-      const root = new THREE.Group();
-      root.add(assembly.root.clone());
-      root.scale.setScalar(0.001);
-      const glb = await new GLTFExporter().parseAsync(root, { binary: true });
+      const glb = await withExplodedOff(() => {
+        const root = new THREE.Group();
+        root.add(assembly.root.clone());
+        root.scale.setScalar(0.001);
+        return new GLTFExporter().parseAsync(root, { binary: true });
+      });
       downloadBlob(new Blob([glb], { type: "model/gltf-binary" }), `${exportName()}.glb`);
       return;
     }
@@ -2048,15 +2060,17 @@ function renderDrawing() {
       const params = assembly.on
         ? []
         : extractParams(currentCode).map((p) => ({ name: humanize(p.name), value: p.value, unit: unitFor(p.hint) }));
-      drawingSvg = buildDrawing(exportRoot(), {
-        renderer,
-        title: assembly.on ? `${project.name} assembly` : activePart.name,
-        project: project.name,
-        material: (MATERIALS[printSettings.material] || MATERIALS[0]).name,
-        params,
-        projection: drawingSettings.projection,
-        sheet: drawingSettings.sheet,
-      }).svg;
+      drawingSvg = withExplodedOff(() =>
+        buildDrawing(exportRoot(), {
+          renderer,
+          title: assembly.on ? `${project.name} assembly` : activePart.name,
+          project: project.name,
+          material: (MATERIALS[printSettings.material] || MATERIALS[0]).name,
+          params,
+          projection: drawingSettings.projection,
+          sheet: drawingSettings.sheet,
+        }).svg
+      );
       drawingPreview.innerHTML = drawingSvg;
     } catch (err) {
       drawingPreview.innerHTML = "";
@@ -2275,7 +2289,7 @@ function newPart(name) {
 }
 
 function newProject(name) {
-  const created = { id: uid(), name, updatedAt: Date.now(), parts: [], assembly: { instances: [] }, activePartId: null };
+  const created = { id: uid(), name, updatedAt: Date.now(), parts: [], assembly: { instances: [], joints: [] }, activePartId: null };
   created.parts.push(newPart("Part 1"));
   return created;
 }
@@ -2290,6 +2304,11 @@ function serializeProject(p) {
     activePartId: p.activePartId,
     assembly: {
       instances: p.assembly.instances.map(({ id, partId, position, quaternion }) => ({ id, partId, position, quaternion })),
+      joints: p.assembly.joints.map(
+        ({ id, parent, child, kind, point, axis, restPosition, restQuaternion, range, value }) => ({
+          id, parent, child, kind, point, axis, restPosition, restQuaternion, range, value,
+        })
+      ),
     },
     parts: p.parts.map((part) => ({
       id: part.id,
@@ -2310,7 +2329,7 @@ function serializeProject(p) {
 }
 
 function hydrateProject(stored) {
-  const p = { ...stored, assembly: { instances: [], ...stored.assembly } };
+  const p = { ...stored, assembly: { instances: [], joints: [], ...stored.assembly } };
   p.parts = (stored.parts || []).map((part) => ({ ...newPart(part.name), ...part }));
   if (!p.parts.length) p.parts.push(newPart("Part 1"));
   return p;
@@ -2635,7 +2654,18 @@ importInput.addEventListener("change", async () => {
 
 /* ---------------- assembly ---------------- */
 
-const assembly = { on: false, root: null, selected: null, mating: false, mateFirst: null, undo: [] };
+const assembly = {
+  on: false,
+  root: null,
+  selected: null,
+  mating: false,
+  mateFirst: null,
+  undo: [],
+  // Picking flow for joint creation: { kind: 'pivot'|'slide', first: {group, round?} | null, second? }.
+  jointing: null,
+  explode: 0,
+  colliding: new Set(),
+};
 
 const transform = new TransformControls(camera, renderer.domElement);
 // three.js r169 puts the handles in a separate helper object; older releases
@@ -2658,6 +2688,9 @@ const mateMaterial = new THREE.MeshBasicMaterial({
   polygonOffsetFactor: -2,
   polygonOffsetUnits: -2,
 });
+
+// Tints a part red when it overlaps another part.
+const collisionMaterial = new THREE.MeshStandardMaterial({ color: 0xff3b4e, metalness: 0.32, roughness: 0.42 });
 
 const instanceGroups = () => (assembly.root ? assembly.root.children : []);
 const selectedGroup = () => instanceGroups().find((g) => g.userData.instance.id === assembly.selected) || null;
@@ -2687,6 +2720,9 @@ async function enterAssembly() {
   setPrintMode(false);
   setPicking(false);
   assembly.on = true;
+  assembly.explode = 0;
+  explodeSlider.value = "0";
+  explodeValue.textContent = "0 mm";
   document.body.classList.add("assembly-mode");
   assemblyPanel.hidden = false;
   codeToggleBtn.disabled = true;
@@ -2699,12 +2735,14 @@ async function enterAssembly() {
 function leaveAssembly() {
   assembly.on = false;
   setMating(false);
+  cancelJointing();
   transform.detach();
-  Object.assign(assembly, { root: null, selected: null, undo: [] });
+  Object.assign(assembly, { root: null, selected: null, undo: [], explode: 0, colliding: new Set() });
   undoMoveBtn.disabled = true;
   document.body.classList.remove("assembly-mode");
   assemblyPanel.hidden = true;
   codeToggleBtn.disabled = false;
+  collisionWarning.hidden = true;
   setSection(false);
   setMeasuring(false);
 }
@@ -2726,7 +2764,15 @@ async function rebuildAssembly(reframe) {
     const model = source.clone();
     model.scale.setScalar(1000);
     const material = partMaterials[partIndex % partMaterials.length];
-    model.traverse((o) => o.isMesh && (o.material = material));
+    model.traverse((o) => {
+      if (o.isMesh) {
+        o.userData.baseMaterial = material;
+        o.material = material;
+      }
+    });
+    // A separate wrapper the explode view can offset without touching the
+    // group's own transform, which joints, dragging and export all rely on.
+    group.userData.model = model;
     group.add(model);
     group.position.fromArray(inst.position);
     group.quaternion.fromArray(inst.quaternion);
@@ -2742,6 +2788,10 @@ async function rebuildAssembly(reframe) {
   editBtn.disabled = printBtn.disabled = organicBtn.disabled = true;
   paramsCard.hidden = true;
   partsCard.hidden = true;
+  applyJoints();
+  applyExplode();
+  checkCollisions();
+  // selectInstance re-renders the panel, picking up the joints/collisions above.
   selectInstance(assembly.selected);
 }
 
@@ -2794,9 +2844,80 @@ function renderAssemblyPanel() {
     asmInstanceList.innerHTML = '<p class="asm-empty">Nothing here yet. Insert a part above.</p>';
   }
 
+  const multiple = instanceGroups().length > 1;
+  jointsSection.hidden = !multiple;
+  explodeSection.hidden = !multiple;
+  renderJointsList();
+
   asmSelection.hidden = !selectedGroup();
   asmSelName.textContent = selectedLabel;
   updateSelectionFields();
+}
+
+// The name shown for an instance in the joints list: its part's name (copies
+// of the same part aren't told apart here, which only matters if you joint
+// two copies of one part to each other — rare enough to not be worth solving).
+function instanceLabel(id) {
+  const group = instanceGroups().find((g) => g.userData.instance.id === id);
+  if (!group) return "(removed)";
+  const part = project.parts.find((p) => p.id === group.userData.instance.partId);
+  return part ? part.name : "?";
+}
+
+function renderJointsList() {
+  asmJointList.replaceChildren();
+  for (const joint of project.assembly.joints) {
+    const row = document.createElement("div");
+    row.className = "asm-joint";
+
+    const head = document.createElement("div");
+    head.className = "asm-joint-head";
+    const kind = document.createElement("span");
+    kind.className = "asm-joint-kind";
+    kind.textContent = joint.kind;
+    const name = document.createElement("span");
+    name.className = "asm-name";
+    name.textContent = `${instanceLabel(joint.parent)} ↔ ${instanceLabel(joint.child)}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "asm-joint-remove";
+    remove.title = "Remove this joint";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => removeJoint(joint.id));
+    head.append(kind, name, remove);
+
+    const sliderRow = document.createElement("div");
+    sliderRow.className = "asm-joint-row";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(joint.range[0]);
+    slider.max = String(joint.range[1]);
+    slider.step = "0.5";
+    slider.value = String(joint.value);
+    slider.setAttribute("aria-label", `${instanceLabel(joint.child)} ${joint.kind === "pivot" ? "angle" : "slide"}`);
+    const unit = joint.kind === "pivot" ? "°" : " mm";
+    const value = document.createElement("span");
+    value.className = "motion-value";
+    value.textContent = `${joint.value.toFixed(1)}${unit}`;
+    slider.addEventListener("input", () => {
+      joint.value = Number(slider.value);
+      value.textContent = `${joint.value.toFixed(1)}${unit}`;
+      applyJoints();
+      applyExplode();
+      refreshHelpers();
+    });
+    slider.addEventListener("change", () => {
+      scheduleSave();
+      checkCollisions();
+    });
+    sliderRow.append(slider, value);
+
+    row.append(head, sliderRow);
+    asmJointList.append(row);
+  }
+  if (!project.assembly.joints.length) {
+    asmJointList.innerHTML = '<p class="asm-empty">No joints yet. Add one below.</p>';
+  }
 }
 
 function selectInstance(id) {
@@ -2834,9 +2955,12 @@ function commitInstance(group) {
   const inst = group.userData.instance;
   inst.position = group.position.toArray();
   inst.quaternion = group.quaternion.toArray();
+  rebakeJointIfChild(group);
+  applyJoints();
   scheduleSave();
   refreshHelpers();
   updateSelectionFields();
+  checkCollisions();
 }
 
 function undoMove() {
@@ -2883,6 +3007,7 @@ async function duplicateSelected() {
 
 function removeInstance(id) {
   project.assembly.instances = project.assembly.instances.filter((i) => i.id !== id);
+  project.assembly.joints = project.assembly.joints.filter((j) => j.parent !== id && j.child !== id);
   if (assembly.selected === id) assembly.selected = null;
   scheduleSave();
   rebuildAssembly(false);
@@ -3083,6 +3208,10 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   if (!assembly.on || ruler.on || !pointerDownAt || e.button !== 0) return;
   if (Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5) return;
   if (transform.dragging || transform.axis) return;
+  if (assembly.jointing) {
+    handleJointClick(e);
+    return;
+  }
   if (assembly.mating) {
     handleMateClick(e);
     return;
@@ -3090,6 +3219,543 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   const group = modelHitAt(e) && instanceGroupOf(modelHitAt(e).object);
   selectInstance(group ? group.userData.instance.id : null);
 });
+
+/* ---------------- assembly joints ---------------- */
+
+// The axis and centre of the round surface (a hole or a pin/shaft) around a
+// clicked triangle, in world coordinates — the same smooth-region-growing and
+// axis-fitting approach as the click-to-edit feature picker, but working
+// directly in world space (assembly instances already sit there) instead of
+// a single part's own coordinates. Returns null off a flat or free-form surface.
+function pickRoundAxis(hit) {
+  const mesh = hit.object;
+  const position = mesh.geometry.getAttribute("position");
+  const index = mesh.geometry.index;
+  const count = (index ? index.count : position.count) / 3;
+  const corner = (t, k) =>
+    new THREE.Vector3().fromBufferAttribute(position, index ? index.getX(3 * t + k) : 3 * t + k).applyMatrix4(mesh.matrixWorld);
+  const triangle = new THREE.Triangle();
+  const corners = [];
+  const normals = [];
+  const areas = [];
+  for (let t = 0; t < count; t++) {
+    const c = [corner(t, 0), corner(t, 1), corner(t, 2)];
+    triangle.set(...c);
+    corners.push(c);
+    areas.push(triangle.getArea());
+    normals.push(triangle.getNormal(new THREE.Vector3()));
+  }
+  // Corners closer than 0.01 mm count as the same point: the mesh isn't welded.
+  const key = (v) => `${Math.round(v.x * 100)},${Math.round(v.y * 100)},${Math.round(v.z * 100)}`;
+  const byCorner = new Map();
+  corners.forEach((c, t) =>
+    c.forEach((v) => {
+      const k = key(v);
+      if (!byCorner.has(k)) byCorner.set(k, []);
+      byCorner.get(k).push(t);
+    })
+  );
+
+  const smooth = Math.cos(THREE.MathUtils.degToRad(25));
+  const region = new Set([hit.faceIndex]);
+  const queue = [hit.faceIndex];
+  while (queue.length && region.size < 20000) {
+    const t = queue.pop();
+    for (const v of corners[t]) {
+      for (const u of byCorner.get(key(v))) {
+        if (!region.has(u) && areas[u] > 0 && normals[u].dot(normals[t]) > smooth) {
+          region.add(u);
+          queue.push(u);
+        }
+      }
+    }
+  }
+  const list = [...region];
+  const regionNormals = list.map((t) => normals[t]);
+  if (regionNormals.length < 8) return null;
+
+  // Every cross product of two normals on a cylinder lies along its axis;
+  // summing them (turned to agree) gives the axis direction.
+  const step = Math.max(1, Math.ceil(regionNormals.length / 200));
+  const sample = regionNormals.filter((_, i) => i % step === 0);
+  const axis = new THREE.Vector3();
+  const cross = new THREE.Vector3();
+  for (let i = 0; i < sample.length; i++) {
+    for (let j = i + 1; j < sample.length; j++) {
+      cross.crossVectors(sample[i], sample[j]);
+      axis.addScaledVector(cross, cross.dot(axis) < 0 ? -1 : 1);
+    }
+  }
+  if (axis.length() < 1e-6) return null;
+  axis.normalize();
+  if (!regionNormals.every((n) => Math.abs(n.dot(axis)) < 0.2)) return null;
+
+  // Fit the axis's radius and position: each face centre sits `radius` out
+  // along its (axis-flattened) normal from the axis line.
+  const flatten = (v) => v.clone().addScaledVector(axis, -v.dot(axis));
+  const points = list.map((t) => corners[t][0].clone().add(corners[t][1]).add(corners[t][2]).divideScalar(3));
+  const p = points.map(flatten);
+  const n = regionNormals.map((v) => flatten(v).normalize());
+  const mean = (arr) => arr.reduce((s, v) => s.add(v), new THREE.Vector3()).divideScalar(arr.length);
+  const meanP = mean(p);
+  const meanN = mean(n);
+  let top = 0;
+  let bottom = 0;
+  p.forEach((v, i) => {
+    const dn = n[i].clone().sub(meanN);
+    top += v.clone().sub(meanP).dot(dn);
+    bottom += dn.lengthSq();
+  });
+  const radius = bottom > 1e-9 ? top / bottom : 0;
+  if (Math.abs(radius) < 0.1) return null; // too flat to trust as a cylinder
+  const along = list.flatMap((t) => corners[t].map((c) => c.dot(axis)));
+  const middle = (Math.max(...along) + Math.min(...along)) / 2;
+  const centre = meanP.clone().addScaledVector(meanN, -radius).addScaledVector(axis, middle);
+  return { axis, centre, radius: Math.abs(radius) };
+}
+
+// A translucent marker at a picked pivot axis, reusing the snap-face colour.
+function axisHighlight(round) {
+  const height = Math.max(round.radius * 0.6, 1);
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(round.radius, round.radius, height, 40, 1, true), mateMaterial);
+  mesh.position.copy(round.centre);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), round.axis);
+  return mesh;
+}
+
+function setJointing(kind) {
+  if (assembly.jointing && assembly.jointing.kind === kind) {
+    cancelJointing();
+    return;
+  }
+  if (instanceGroups().length < 2) {
+    showToast("Insert at least two parts to add a joint.");
+    return;
+  }
+  setMating(false);
+  setMeasuring(false);
+  selectInstance(null);
+  assembly.jointing = { kind, first: null };
+  addPivotBtn.classList.toggle("active", kind === "pivot");
+  addSlideBtn.classList.toggle("active", kind === "slide");
+  jointAxisPicker.hidden = true;
+  jointHint.hidden = false;
+  jointHint.textContent =
+    kind === "pivot" ? "Click a round hole or pin on the first part." : "Click the first part.";
+  if (!busy && partInfoText) showViewerStatus(idleStatusText());
+}
+
+function cancelJointing() {
+  if (!assembly.jointing) return;
+  assembly.jointing = null;
+  addPivotBtn.classList.remove("active");
+  addSlideBtn.classList.remove("active");
+  jointAxisPicker.hidden = true;
+  jointHint.hidden = true;
+  clearMateHighlight();
+  if (!busy && partInfoText) showViewerStatus(idleStatusText());
+}
+
+addPivotBtn.addEventListener("click", () => setJointing("pivot"));
+addSlideBtn.addEventListener("click", () => setJointing("slide"));
+
+// Whether making `parentId` the parent of `childId` would close a loop of joints.
+function wouldCycle(parentId, childId) {
+  const byChild = new Map(project.assembly.joints.map((j) => [j.child, j]));
+  let id = parentId;
+  const seen = new Set();
+  while (byChild.has(id) && !seen.has(id)) {
+    seen.add(id);
+    id = byChild.get(id).parent;
+    if (id === childId) return true;
+  }
+  return false;
+}
+
+const existingParentJoint = (childId) => project.assembly.joints.find((j) => j.child === childId);
+
+function localPoint(group, worldPoint) {
+  return worldPoint.clone().applyMatrix4(group.matrixWorld.clone().invert());
+}
+
+function localDirection(group, worldDirection) {
+  const rotation = new THREE.Quaternion();
+  group.getWorldQuaternion(rotation);
+  return worldDirection.clone().applyQuaternion(rotation.invert()).normalize();
+}
+
+// A new joint's shared fields: which instance becomes the parent and child,
+// and the child's current pose expressed relative to the parent (its "rest"
+// offset, restored whenever the joint's slider is back at zero).
+function baseJoint(parentGroup, childGroup, kind) {
+  const parentId = parentGroup.userData.instance.id;
+  const childId = childGroup.userData.instance.id;
+  if (parentId === childId) return null;
+  if (existingParentJoint(childId)) {
+    showToast("That part already has a joint. Remove it first.");
+    return null;
+  }
+  if (wouldCycle(parentId, childId)) {
+    showToast("That would make a loop of joints.");
+    return null;
+  }
+  parentGroup.updateMatrixWorld(true);
+  childGroup.updateMatrixWorld(true);
+  const restLocal = parentGroup.matrixWorld.clone().invert().multiply(childGroup.matrixWorld);
+  const restPosition = new THREE.Vector3();
+  const restQuaternion = new THREE.Quaternion();
+  const scratch = new THREE.Vector3();
+  restLocal.decompose(restPosition, restQuaternion, scratch);
+  return {
+    id: uid(),
+    parent: parentId,
+    child: childId,
+    kind,
+    restPosition: restPosition.toArray(),
+    restQuaternion: restQuaternion.toArray(),
+    range: kind === "pivot" ? [-180, 180] : [-50, 50],
+    value: 0,
+  };
+}
+
+function createPivotJoint(parentGroup, parentRound, childGroup, childRound) {
+  const joint = baseJoint(parentGroup, childGroup, "pivot");
+  if (!joint) return;
+  const centreWorld = parentRound.centre.clone().add(childRound.centre).multiplyScalar(0.5);
+  joint.point = localPoint(parentGroup, centreWorld).toArray();
+  joint.axis = localDirection(parentGroup, parentRound.axis).toArray();
+  project.assembly.joints.push(joint);
+  finishJointCreation();
+}
+
+function createSlideJoint(parentGroup, childGroup, worldAxis) {
+  const joint = baseJoint(parentGroup, childGroup, "slide");
+  if (!joint) return;
+  joint.point = [0, 0, 0];
+  joint.axis = localDirection(parentGroup, worldAxis).toArray();
+  project.assembly.joints.push(joint);
+  finishJointCreation();
+}
+
+function finishJointCreation() {
+  scheduleSave();
+  applyJoints();
+  checkCollisions();
+  renderAssemblyPanel();
+  showToast("Joint added. Drag its slider to move it.");
+}
+
+function removeJoint(id) {
+  // Keep the joint's last computed position as the child's new resting pose.
+  const joint = project.assembly.joints.find((j) => j.id === id);
+  const group = joint && instanceGroups().find((g) => g.userData.instance.id === joint.child);
+  if (group) {
+    group.userData.instance.position = group.position.toArray();
+    group.userData.instance.quaternion = group.quaternion.toArray();
+  }
+  project.assembly.joints = project.assembly.joints.filter((j) => j.id !== id);
+  scheduleSave();
+  renderAssemblyPanel();
+}
+
+// If the user manually drags a part that has a joint to a parent, treat where
+// they dropped it as the joint's new zero position instead of snapping back
+// to wherever the joint's current value says it should be.
+function rebakeJointIfChild(childGroup) {
+  const joint = existingParentJoint(childGroup.userData.instance.id);
+  if (!joint) return;
+  const parentGroup = instanceGroups().find((g) => g.userData.instance.id === joint.parent);
+  if (!parentGroup) return;
+  parentGroup.updateMatrixWorld(true);
+  childGroup.updateMatrixWorld(true);
+  const restLocal = parentGroup.matrixWorld.clone().invert().multiply(childGroup.matrixWorld);
+  const restPosition = new THREE.Vector3();
+  const restQuaternion = new THREE.Quaternion();
+  const scratch = new THREE.Vector3();
+  restLocal.decompose(restPosition, restQuaternion, scratch);
+  joint.restPosition = restPosition.toArray();
+  joint.restQuaternion = restQuaternion.toArray();
+  joint.value = 0;
+}
+
+// Recomputes every jointed instance's position from its parent's current
+// transform, the joint's rest offset, and its slider value — forward
+// kinematics down the tree of joints (parents always computed before children).
+function applyJoints() {
+  const joints = project.assembly.joints;
+  if (!joints.length) return;
+  const groupsById = new Map(instanceGroups().map((g) => [g.userData.instance.id, g]));
+  const byChild = new Map(joints.map((j) => [j.child, j]));
+  const ordered = [];
+  const done = new Set();
+  let guard = joints.length + 1;
+  while (ordered.length < joints.length && guard-- > 0) {
+    for (const j of joints) {
+      if (done.has(j.id)) continue;
+      const parentJoint = byChild.get(j.parent);
+      if (!parentJoint || done.has(parentJoint.id)) {
+        ordered.push(j);
+        done.add(j.id);
+      }
+    }
+  }
+
+  const world = new THREE.Matrix4();
+  const rest = new THREE.Matrix4();
+  const delta = new THREE.Matrix4();
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scl = new THREE.Vector3();
+  const one = new THREE.Vector3(1, 1, 1);
+  for (const j of ordered) {
+    const parentGroup = groupsById.get(j.parent);
+    const childGroup = groupsById.get(j.child);
+    if (!parentGroup || !childGroup) continue;
+    parentGroup.updateMatrixWorld(true);
+    rest.compose(new THREE.Vector3().fromArray(j.restPosition), new THREE.Quaternion().fromArray(j.restQuaternion), one);
+    const axis = new THREE.Vector3().fromArray(j.axis).normalize();
+    if (j.kind === "pivot") {
+      const point = new THREE.Vector3().fromArray(j.point);
+      const q = new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(j.value));
+      delta.compose(point.clone().sub(point.clone().applyQuaternion(q)), q, one);
+    } else {
+      delta.identity().setPosition(axis.multiplyScalar(j.value));
+    }
+    world.copy(parentGroup.matrixWorld).multiply(delta).multiply(rest);
+    world.decompose(pos, quat, scl);
+    childGroup.position.copy(pos);
+    childGroup.quaternion.copy(quat);
+    childGroup.updateMatrixWorld(true);
+  }
+}
+
+function handleJointClick(event) {
+  const hit = modelHitAt(event);
+  const group = hit && instanceGroupOf(hit.object);
+  if (!group) return;
+  const jointing = assembly.jointing;
+
+  if (jointing.kind === "pivot") {
+    const round = pickRoundAxis(hit);
+    if (!round) {
+      showToast("Click a round hole or pin surface for the pivot axis.");
+      return;
+    }
+    if (!jointing.first) {
+      jointing.first = { group, round };
+      clearMateHighlight();
+      mateGroup.add(axisHighlight(round));
+      jointHint.textContent = "Now click the matching hole or pin on the second part.";
+      return;
+    }
+    if (group === jointing.first.group) {
+      showToast("Pick a feature on a different part.");
+      return;
+    }
+    createPivotJoint(jointing.first.group, jointing.first.round, group, round);
+    cancelJointing();
+    return;
+  }
+
+  // Slide joint: pick the two parts, then an axis via the on-screen buttons.
+  if (!jointing.first) {
+    jointing.first = { group };
+    jointHint.textContent = "Now click the second part.";
+    return;
+  }
+  if (group === jointing.first.group) {
+    showToast("Pick a different part.");
+    return;
+  }
+  jointing.second = group;
+  jointHint.textContent = "Pick the slide direction.";
+  jointAxisPicker.hidden = false;
+}
+
+jointAxisPicker.querySelectorAll("[data-joint-axis]").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    const jointing = assembly.jointing;
+    if (!jointing || jointing.kind !== "slide" || !jointing.second) return;
+    // The same X/Y/Z convention as the position fields and Turn 90°, so the
+    // assembly panel's axes always mean the same thing.
+    createSlideJoint(jointing.first.group, jointing.second, PART_AXES[btn.dataset.jointAxis].clone());
+    cancelJointing();
+  })
+);
+
+/* ---------------- exploded view ---------------- */
+
+// Offsets each instance outward from the assembly's centre — applied to the
+// instance's inner model, not the instance group itself, so it's purely
+// visual and never touches the position joints, dragging and export rely on.
+function applyExplode() {
+  const groups = instanceGroups();
+  if (!groups.length) return;
+  const amount = assembly.explode;
+  if (amount <= 0) {
+    for (const g of groups) g.userData.model.position.set(0, 0, 0);
+    return;
+  }
+  const centre = new THREE.Vector3();
+  const centres = groups.map((g) => {
+    const c = new THREE.Box3().setFromObject(g).getCenter(new THREE.Vector3());
+    centre.add(c);
+    return c;
+  });
+  centre.divideScalar(groups.length);
+  const rotation = new THREE.Quaternion();
+  groups.forEach((g, i) => {
+    const direction = centres[i].clone().sub(centre);
+    if (direction.lengthSq() < 1) direction.set(0, 1, 0); // concentric parts: pull straight up
+    direction.normalize().multiplyScalar(amount);
+    g.getWorldQuaternion(rotation);
+    g.userData.model.position.copy(direction.applyQuaternion(rotation.invert()));
+  });
+}
+
+explodeSlider.addEventListener("input", () => {
+  assembly.explode = Number(explodeSlider.value);
+  explodeValue.textContent = `${assembly.explode} mm`;
+  applyExplode();
+});
+explodeSlider.addEventListener("change", () => checkCollisions());
+
+// Runs fn with any exploded view temporarily collapsed, e.g. for an export
+// that must reflect the assembly as designed rather than pulled apart. fn may
+// return a promise (an async export); the explode view is restored only once
+// it settles, not before it's actually finished reading the geometry.
+function withExplodedOff(fn) {
+  const amount = assembly.explode;
+  if (amount > 0) {
+    assembly.explode = 0;
+    applyExplode();
+  }
+  const restore = () => {
+    if (amount > 0) {
+      assembly.explode = amount;
+      applyExplode();
+    }
+  };
+  let result;
+  try {
+    result = fn();
+  } catch (err) {
+    restore();
+    throw err;
+  }
+  if (result && typeof result.then === "function") return result.finally(restore);
+  restore();
+  return result;
+}
+
+/* ---------------- collision check ---------------- */
+
+// A ray/triangle hit test (Möller–Trumbore), the same approach print.js uses
+// for wall thickness, adapted to take explicit points instead of typed arrays.
+function rayHitsTriangle(ox, oy, oz, dx, dy, dz, ax, ay, az, bx, by, bz, cx, cy, cz) {
+  const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+  const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+  const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+  const det = e1x * px + e1y * py + e1z * pz;
+  if (Math.abs(det) < 1e-9) return false;
+  const inv = 1 / det;
+  const sx = ox - ax, sy = oy - ay, sz = oz - az;
+  const u = (sx * px + sy * py + sz * pz) * inv;
+  if (u < 0 || u > 1) return false;
+  const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+  const v = (dx * qx + dy * qy + dz * qz) * inv;
+  if (v < 0 || u + v > 1) return false;
+  const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+  return t > 1e-4;
+}
+
+// World-space triangle corners of a group's meshes, flattened to 9 numbers each.
+function groupTriangles(group) {
+  const out = [];
+  group.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  group.traverse((child) => {
+    if (!child.isMesh) return;
+    const position = child.geometry.getAttribute("position");
+    const index = child.geometry.index;
+    const count = index ? index.count : position.count;
+    for (let i = 0; i < count; i++) {
+      v.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(child.matrixWorld);
+      out.push(v.x, v.y, v.z);
+    }
+  });
+  return Float32Array.from(out);
+}
+
+// An arbitrary fixed direction, not axis-aligned, so a test ray never grazes
+// along a flat face of an axis-aligned part.
+const COLLISION_RAY = [0.5773, 0.5774, 0.5773];
+// Vertices sampled per part when testing whether it pokes into another; keeps
+// the check quick even for a detailed mesh.
+const COLLISION_SAMPLE_CAP = 300;
+
+function pointInsideTriangles(px, py, pz, tris) {
+  let crossings = 0;
+  for (let i = 0; i < tris.length; i += 9) {
+    if (
+      rayHitsTriangle(
+        px, py, pz, COLLISION_RAY[0], COLLISION_RAY[1], COLLISION_RAY[2],
+        tris[i], tris[i + 1], tris[i + 2], tris[i + 3], tris[i + 4], tris[i + 5], tris[i + 6], tris[i + 7], tris[i + 8]
+      )
+    ) {
+      crossings++;
+    }
+  }
+  return crossings % 2 === 1;
+}
+
+// Whether a sample of one mesh's vertices lie inside another (a vertex ray
+// crosses the other mesh's surface an odd number of times). Catches the
+// common cases — a boss or pin pushed too far into its mate — though two
+// paper-thin shells crossing with no vertex inside either can slip past.
+function anyVertexInside(tris, otherTris) {
+  const step = Math.max(1, Math.floor(tris.length / 3 / COLLISION_SAMPLE_CAP));
+  for (let i = 0; i < tris.length; i += 3 * step) {
+    if (pointInsideTriangles(tris[i], tris[i + 1], tris[i + 2], otherTris)) return true;
+  }
+  return false;
+}
+
+// Tints any instance that overlaps another red, and shows the warning line.
+function checkCollisions() {
+  const groups = instanceGroups();
+  const colliding = new Set();
+  if (groups.length > 1) {
+    const boxes = groups.map((g) => new THREE.Box3().setFromObject(g));
+    const trisCache = new Map();
+    const trisOf = (g) => {
+      if (!trisCache.has(g)) trisCache.set(g, groupTriangles(g));
+      return trisCache.get(g);
+    };
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        const overlap = boxes[i].clone().intersect(boxes[j]);
+        if (overlap.isEmpty()) continue;
+        const size = overlap.getSize(new THREE.Vector3());
+        if (size.x < 0.1 || size.y < 0.1 || size.z < 0.1) continue; // touching, not overlapping
+        const trisA = trisOf(groups[i]);
+        const trisB = trisOf(groups[j]);
+        if (anyVertexInside(trisA, trisB) || anyVertexInside(trisB, trisA)) {
+          colliding.add(groups[i].userData.instance.id);
+          colliding.add(groups[j].userData.instance.id);
+        }
+      }
+    }
+  }
+  assembly.colliding = colliding;
+  for (const g of groups) {
+    const bad = colliding.has(g.userData.instance.id);
+    g.traverse((o) => {
+      if (o.isMesh) o.material = bad ? collisionMaterial : o.userData.baseMaterial;
+    });
+  }
+  collisionWarning.hidden = colliding.size === 0;
+}
 
 /* ---------------- toolbar ---------------- */
 
@@ -3128,6 +3794,7 @@ document.addEventListener("keydown", (e) => {
     else if (!projectMenu.hidden) setProjectMenu(false);
     else if (codeDrawer.classList.contains("is-open")) setCodeDrawer(false);
     else if (assembly.mating) setMating(false);
+    else if (assembly.jointing) cancelJointing();
     else if (picker.on) setPicking(false);
     else if (printState.on) setPrintMode(false);
     else if (ruler.on) setMeasuring(false);
