@@ -1,3 +1,6 @@
+import json
+import re
+
 SYSTEM_PROMPT = """You are a CAD modeling assistant. You write Python code using the \
 `build123d` library (imported as `from build123d import *`) to construct 3D solids.
 
@@ -348,3 +351,76 @@ def build_repair_prompt(error: str) -> str:
         "incorrectly, prefer switching to a simpler approach from the cheat-sheet rather than "
         "debugging the same complex call again."
     )
+
+
+# Plans a whole product into a short list of parts, each with a self-contained
+# build prompt handed separately to the normal single-part pipeline above (a
+# fresh call, with no memory of the other parts' code) so they can be built and
+# reviewed with the exact same machinery as a part someone typed by hand.
+PLAN_SYSTEM_PROMPT = """You are a CAD project planner. Given a plain-English description of a product, \
+break it into the small number of separate solid parts it should be built and 3D printed or machined as, \
+so an app can generate each one and assemble them.
+
+Output rules:
+- Output ONLY a single JSON object, nothing else: no markdown fences, no prose before or after.
+- Shape: {"parts": [{"name": "...", "prompt": "..."}, ...]}
+- 1 part if the request already describes a single part — don't invent extra parts. Otherwise \
+  2 to 5 parts; never more than 5.
+- "name": 1-3 words, used as a UI label (e.g. "Pen holder", "Lid", "Base plate").
+- "prompt": a complete, self-contained, plain-English description of that one part, in the same \
+  style a person would type: concrete numbers in millimeters for every size, no vague words like \
+  "appropriately sized". It must stand entirely on its own — it is sent to a separate AI call \
+  with NO knowledge of the product description or the other parts' prompts, so restate everything \
+  that part's builder needs to know. Never refer to another part by name ("matching the base") \
+  without also giving the actual number.
+- Each part should be simple enough to build in one shot: a solid shape with clear features \
+  (holes, slots, a flange, ribs), not an internal mechanism, unless the product genuinely needs \
+  one moving part described as a single assembly.
+- Where two parts must physically fit together (a peg into a hole, a lid onto a box, a shaft \
+  through a bore, a tab into a slot), invent one concrete shared dimension and use the SAME \
+  number in both prompts' text — e.g. if a leg is "a peg 8mm diameter, 12mm tall", the part it \
+  plugs into must say "a socket 8.3mm diameter, 12mm deep" (about 0.3mm larger for a sliding fit \
+  a print can assemble by hand). Get every such interface dimension to actually agree between \
+  the two prompts.
+- Keep the overall product's rough proportions sensible and consistent across parts (don't size \
+  one part in centimeters and another in meters).
+
+Example — input "a desk organizer with a pen holder and a phone stand that clips onto its side" — \
+a reasonable output:
+{"parts": [
+  {"name": "Pen holder", "prompt": "A cylindrical pen holder, 70mm outer diameter, 90mm tall, \
+walls 3mm thick, open top, with a 6mm wide, 20mm tall notch cut into one side of the rim near \
+the base to receive a clip."},
+  {"name": "Phone stand clip", "prompt": "A phone stand that clips onto a 70mm diameter cylinder: \
+a curved clip 6mm wide, 20mm tall, 3mm thick shaped to snap over a 70mm diameter surface, joined \
+to a flat stand angled at 65 degrees from vertical with a 5mm front lip, sized for a phone 75mm \
+wide and 8mm thick."}
+]}
+"""
+
+
+def parse_plan(text: str) -> list[tuple[str, str]] | None:
+    """Pulls {"parts": [{"name", "prompt"}, ...]} out of the planner's reply.
+
+    Tolerates a stray code fence or leading/trailing prose around the JSON,
+    since models don't always follow "output only JSON" to the letter.
+    """
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    parts = payload.get("parts") if isinstance(payload, dict) else None
+    if not isinstance(parts, list) or not parts:
+        return None
+    result = []
+    for item in parts[:5]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        prompt = str(item.get("prompt", "")).strip()
+        if name and prompt:
+            result.append((name[:60], prompt[:2000]))
+    return result or None

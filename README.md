@@ -87,6 +87,18 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   the browser (IndexedDB), so they need no account or server; **Export
   project file** writes a `.jokercad.json` backup that **Import** reads back,
   on any browser.
+- **Build a whole project** (in the project menu): describe a whole product —
+  "a desk organizer with a pen holder, a phone stand and a small drawer" —
+  and jokercad plans the parts it needs, shows you the list (uncheck any you
+  don't want), builds each one with the normal single-part pipeline, and
+  drops them into the Assembly tab, spaced out so nothing starts overlapping.
+  The planning step is a single AI call that also invents the shared numbers
+  for where two parts meet (a peg's diameter and the socket it fits), since
+  each part is then built by its own separate call with no memory of the
+  others — so a fit is as good as the numbers the planner picked, not
+  geometrically guaranteed; nudge a part's own chat afterward if two pieces
+  need to match more precisely. Every generated part is a normal part
+  afterward: its own chat, version history and parameters.
 - **Assembly** tab: insert copies of the project's parts, then move and rotate
   them with the on-screen handles (`G` move, `R` rotate), by typing a position,
   or with 90° turns. **Snap faces together** turns a part so a face you click

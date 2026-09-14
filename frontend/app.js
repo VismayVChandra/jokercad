@@ -119,6 +119,19 @@ const drawingSheet = document.getElementById("drawingSheet");
 const drawingSvgBtn = document.getElementById("drawingSvgBtn");
 const drawingPdfBtn = document.getElementById("drawingPdfBtn");
 const drawingCloseBtn = document.getElementById("drawingCloseBtn");
+const planProjectBtn = document.getElementById("planProjectBtn");
+const planModal = document.getElementById("planModal");
+const planCloseBtn = document.getElementById("planCloseBtn");
+const planIntro = document.getElementById("planIntro");
+const planInput = document.getElementById("planInput");
+const planError = document.getElementById("planError");
+const planGoBtn = document.getElementById("planGoBtn");
+const planListSection = document.getElementById("planListSection");
+const planPartsEl = document.getElementById("planParts");
+const planBackBtn = document.getElementById("planBackBtn");
+const planBuildBtn = document.getElementById("planBuildBtn");
+const planProgress = document.getElementById("planProgress");
+const planStatusList = document.getElementById("planStatusList");
 const arModal = document.getElementById("arModal");
 const arViewer = document.getElementById("arViewer");
 const arCloseBtn = document.getElementById("arCloseBtn");
@@ -1585,6 +1598,168 @@ arCopyLinkBtn.addEventListener("click", async () => {
   }
 });
 
+/* ---------------- whole-project planning ---------------- */
+
+// Same shape as callApi, but not tied to a chat entry: planning happens
+// before any part (or its chat log) exists yet.
+async function planApi(payload) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 480_000);
+  try {
+    const res = await fetch(`${API_BASE}/api/plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...passwordHeader(password) },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (res.status === 401) {
+      rememberPassword("");
+      showLock();
+      return { error: "This workspace needs the access password." };
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { error: typeof body.detail === "string" ? body.detail : `Server returned ${res.status}` };
+    }
+    return { data: await res.json() };
+  } catch (err) {
+    return {
+      error: err.name === "AbortError" ? "Request timed out after 8 minutes." : `Request failed: ${err.message}`,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+let plannedParts = [];
+
+function openPlanModal() {
+  if (busy) {
+    showToast("Wait for the current build to finish.");
+    return;
+  }
+  planModal.hidden = false;
+  planIntro.hidden = false;
+  planListSection.hidden = true;
+  planProgress.hidden = true;
+  planError.hidden = true;
+  planInput.value = "";
+  planInput.focus();
+}
+
+function closePlanModal() {
+  planModal.hidden = true;
+}
+
+planProjectBtn.addEventListener("click", openPlanModal);
+planCloseBtn.addEventListener("click", closePlanModal);
+planModal.addEventListener("click", (e) => {
+  if (e.target === planModal) closePlanModal();
+});
+
+function renderPlanParts() {
+  planPartsEl.replaceChildren();
+  plannedParts.forEach((p, i) => {
+    const row = document.createElement("label");
+    row.className = "plan-part-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.index = String(i);
+    const name = document.createElement("span");
+    name.className = "plan-part-name";
+    name.textContent = p.name;
+    const desc = document.createElement("span");
+    desc.className = "plan-part-desc";
+    desc.textContent = p.prompt;
+    row.append(checkbox, name, desc);
+    planPartsEl.appendChild(row);
+  });
+}
+
+planGoBtn.addEventListener("click", async () => {
+  const prompt = planInput.value.trim();
+  if (!prompt) return;
+  planGoBtn.disabled = true;
+  planGoBtn.textContent = "Planning…";
+  planError.hidden = true;
+  const { data, error } = await planApi({ prompt });
+  planGoBtn.disabled = false;
+  planGoBtn.textContent = "Plan the parts";
+  if (error || !data || !data.ok) {
+    planError.textContent = (data && data.error) || error || "Couldn't plan that project.";
+    planError.hidden = false;
+    return;
+  }
+  plannedParts = data.parts;
+  renderPlanParts();
+  planIntro.hidden = true;
+  planListSection.hidden = false;
+});
+
+planBackBtn.addEventListener("click", () => {
+  planListSection.hidden = true;
+  planIntro.hidden = false;
+});
+
+// Builds each chosen part exactly as if the user had created a part and typed
+// its prompt by hand (same /api/generate call, same commitVersion), one at a
+// time so each can see the UI update; then inserts the ones that built into
+// the assembly, reusing insertPart's own non-overlapping placement.
+planBuildBtn.addEventListener("click", async () => {
+  const boxes = [...planPartsEl.querySelectorAll("input[type=checkbox]")];
+  const chosen = boxes.filter((cb) => cb.checked).map((cb) => plannedParts[Number(cb.dataset.index)]);
+  if (!chosen.length) return;
+  planListSection.hidden = true;
+  planProgress.hidden = false;
+  planStatusList.replaceChildren();
+  const rows = chosen.map((p) => {
+    const li = document.createElement("li");
+    li.className = "plan-status-row";
+    li.textContent = `${p.name} — waiting…`;
+    planStatusList.appendChild(li);
+    return li;
+  });
+
+  const built = [];
+  for (let i = 0; i < chosen.length; i++) {
+    const planned = chosen[i];
+    rows[i].textContent = `${planned.name} — building…`;
+    const part = addPart(planned.name);
+    selectPart(part);
+    addUserEntry(planned.prompt);
+    recordLog({ kind: "user", text: planned.prompt });
+    setBusy(true, `Building ${planned.name}…`);
+    const pending = addThinkingEntry("Generating…");
+    const { data } = await callApi("/api/generate", { prompt: planned.prompt, history: [], fit: fitSelect.value }, pending);
+    if (data && data.ok) {
+      conversation.push({ role: "user", content: planned.prompt }, { role: "assistant", content: fence(data.code) });
+      commitVersion(pending, `Built via ${data.provider_used}`, data, true);
+      setProviderBadge(data.provider_used);
+      built.push(part);
+      rows[i].textContent = `${planned.name} — built`;
+      rows[i].classList.add("is-ok");
+    } else {
+      rows[i].textContent = `${planned.name} — failed: ${(data && data.error) || "couldn't reach the server"}`;
+      rows[i].classList.add("is-error");
+    }
+    setBusy(false);
+  }
+
+  if (built.length) {
+    // enterAssembly checks `busy` itself, so it has to run before setBusy(true).
+    if (!assembly.on) await enterAssembly();
+    setBusy(true, "Assembling…");
+    for (const part of built) await insertPart(part);
+    setBusy(false);
+  }
+
+  closePlanModal();
+  if (built.length === chosen.length) showToast(`Built and assembled ${built.length} part${built.length === 1 ? "" : "s"}.`);
+  else if (built.length) showToast(`Built ${built.length} of ${chosen.length} parts and assembled them — see the chat for what failed.`);
+  else showToast("None of the parts built. See the chat for details.");
+});
+
 /* ---------------- pictures ---------------- */
 
 // A photo or sketch to send with the next prompt: { base64, thumb } (JPEGs).
@@ -2932,6 +3107,9 @@ function bytesToBase64(bytes) {
 }
 
 const PROJECT_ACTIONS = {
+  plan() {
+    openPlanModal();
+  },
   new() {
     const name = window.prompt("Name the new project", "Untitled project");
     if (!name || !name.trim()) return;
@@ -4273,6 +4451,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     // Closes the most recently opened thing first.
     if (!arModal.hidden) closeArModal();
+    else if (!planModal.hidden) closePlanModal();
     else if (!drawingModal.hidden) drawingModal.hidden = true;
     else if (!editPopup.hidden) closeEditPopup();
     else if (!exportMenu.hidden) setExportMenu(false);

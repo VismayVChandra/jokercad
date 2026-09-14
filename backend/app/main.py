@@ -19,11 +19,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .cad.executor import ExecutionResult, extract_code, run_build123d_code
-from .cad.prompts import SYSTEM_PROMPT, build_repair_prompt
+from .cad.prompts import PLAN_SYSTEM_PROMPT, SYSTEM_PROMPT, build_repair_prompt, parse_plan
 from .cad.render import render_views
 from .cad.review import REVIEW_PROMPT, VISUAL_REVIEW_PROMPT, build_review_request, parse_verdict
 from .llm.router import LLMRouter, RouterExhaustedError
-from .models import GenerateRequest, GenerateResponse, RunRequest
+from .models import GenerateRequest, GenerateResponse, PlannedPart, PlanRequest, PlanResponse, RunRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("jokercad")
@@ -431,6 +431,31 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
         error=f"Couldn't build a valid part after {MAX_REPAIR_ATTEMPTS} attempts. Last error: {last_line}",
         attempts=MAX_REPAIR_ATTEMPTS,
     )
+
+
+@app.post("/api/plan", response_model=PlanResponse)
+def plan(req: PlanRequest, request: Request) -> PlanResponse:
+    """Breaks a whole-product prompt into a short list of parts, each with its own
+    self-contained build prompt, to hand one at a time to /api/generate and assemble."""
+    _require_password(request)
+
+    prompt = req.prompt.strip()
+    if not prompt:
+        return PlanResponse(ok=False, error="Describe what you want to build.")
+    if len(prompt) > MAX_PROMPT_LENGTH:
+        return PlanResponse(ok=False, error=f"Prompt is too long (max {MAX_PROMPT_LENGTH} characters).")
+
+    _consume_generation_slot()
+
+    try:
+        text, _ = router.generate(PLAN_SYSTEM_PROMPT, [{"role": "user", "content": prompt}])
+    except RouterExhaustedError as e:
+        return PlanResponse(ok=False, error=e.user_message())
+
+    parts = parse_plan(text)
+    if not parts:
+        return PlanResponse(ok=False, error="Couldn't break that into parts — try describing it a bit more concretely.")
+    return PlanResponse(ok=True, parts=[PlannedPart(name=name, prompt=part_prompt) for name, part_prompt in parts])
 
 
 @app.post("/api/run", response_model=GenerateResponse)

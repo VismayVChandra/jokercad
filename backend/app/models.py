@@ -23,6 +23,21 @@ class RunRequest(BaseModel):
     code: str = Field(max_length=20000)
 
 
+class PlanRequest(BaseModel):
+    prompt: str
+
+
+class PlannedPart(BaseModel):
+    name: str
+    prompt: str
+
+
+class PlanResponse(BaseModel):
+    ok: bool
+    parts: list[PlannedPart] | None = None
+    error: str | None = None
+
+
 class GenerateResponse(BaseModel):
     ok: bool
     provider_used: str | None = None
