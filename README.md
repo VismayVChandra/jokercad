@@ -106,9 +106,13 @@ Without Gemini, a text-only check of the code and measurements runs instead.
 ## Syncing projects across devices (optional)
 
 Projects work entirely from this browser's own storage by default — nothing
-to set up. To also have them follow you to your phone or another computer,
-connect a free [Supabase](https://supabase.com) project (`frontend/sync.js`):
-until you do, the sync icon stays hidden and nothing changes.
+to set up. This section is for whoever **runs** the site: set it up once,
+here, and it's available to everyone who signs in, each person's projects
+kept private from everyone else's by the database policy in step 2 (not by
+the site or by you having to do anything per-visitor). Connects a free
+[Supabase](https://supabase.com) project (`frontend/sync.js`); until it's
+set up here, the sync icon stays hidden for every visitor and nothing else
+changes.
 
 1. Create a free account at supabase.com and a new project (pick any name
    and a database password — you won't need that password again here).
@@ -134,25 +138,28 @@ until you do, the sync icon stays hidden and nothing changes.
    create index if not exists projects_user_id_idx on public.projects (user_id);
    ```
 
-   Row Level Security is what actually keeps your data private — it's
-   enforced by the database itself, on every request, no matter what the
-   browser sends.
+   Row Level Security is what actually keeps each visitor's projects private
+   from every other visitor — enforced by the database itself, on every
+   request, regardless of who's signed in or what the browser sends.
 3. Under **Authentication → URL Configuration**, add your site's URL to
    **Redirect URLs** (`https://your-app.vercel.app/*`, and
-   `http://localhost:8000/*` too if you run it locally) — otherwise the
-   sign-in email's link won't be allowed to bring you back.
+   `http://localhost:8000/*` too if you run it locally) — otherwise a
+   sign-in email's link won't be allowed to bring anyone back.
 4. Under **Project Settings → API**, copy the **Project URL** and the
-   **anon public** key. Unlike the AI provider keys, this key is *meant* to
-   be public — it's safe in a browser precisely because of the policy in
-   step 2 — so open jokercad, click the sync icon (top right), and paste them
-   in there.
-5. Click **Send magic link**, open the email, and you're signed in. Sign in
-   the same way on another device to see the same projects there.
+   **anon public** key, and add them to the server's environment variables
+   (`SUPABASE_URL`, `SUPABASE_ANON_KEY` — alongside `GROQ_API_KEY` and the
+   rest; on Vercel that's **Settings → Environment Variables**, then
+   redeploy). Unlike the AI provider keys, the anon key is *meant* to be
+   public — it's safe for the server to hand to every visitor's browser
+   (via `/api/health`) precisely because of the policy in step 2.
 
-Projects still save to this browser first and always work offline; signing
-in on a second device merges by whichever project was saved most recently,
-so don't rely on it for editing the exact same project on two devices at
-once.
+Once that's set, anyone who opens the site sees a sync icon (top right),
+signs in with their own email (a link, no password), and their projects
+follow them to their other devices — still saved to each browser first and
+working fully offline, with the cloud copy just catching up when there's a
+connection. Signing in on a second device merges by whichever project was
+saved most recently, so don't rely on it for editing the exact same project
+on two devices at once.
 
 ## Free by design
 

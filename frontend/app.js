@@ -129,14 +129,8 @@ const compareRestoreABtn = document.getElementById("compareRestoreABtn");
 const compareRestoreBBtn = document.getElementById("compareRestoreBBtn");
 const accountBtn = document.getElementById("accountBtn");
 const accountMenu = document.getElementById("accountMenu");
-const accountNotSetUp = document.getElementById("accountNotSetUp");
 const accountSignedOut = document.getElementById("accountSignedOut");
 const accountSignedIn = document.getElementById("accountSignedIn");
-const syncSetupForm = document.getElementById("syncSetupForm");
-const syncUrlInput = document.getElementById("syncUrlInput");
-const syncKeyInput = document.getElementById("syncKeyInput");
-const syncSetupStatus = document.getElementById("syncSetupStatus");
-const syncForgetBtn = document.getElementById("syncForgetBtn");
 const signInForm = document.getElementById("signInForm");
 const signInEmail = document.getElementById("signInEmail");
 const signInStatus = document.getElementById("signInStatus");
@@ -2868,21 +2862,20 @@ importInput.addEventListener("change", async () => {
 });
 
 /* ---------------- cloud sync ---------------- */
-// Entirely optional (see README): with no Supabase project connected, every
-// function in sync.js is a no-op, accountBtn stays hidden, and the app works
-// exactly as it does with only this browser's local storage.
+// Entirely optional (see README): the project URL and key live in the
+// site's own environment variables, fetched once from /api/health, never
+// asked of a visitor. With none set there, sync.js's init() finds nothing,
+// accountBtn stays hidden, and the app works exactly as it does with only
+// this browser's local storage.
 
 let wasSignedIn = false;
 
-function initCloudSync() {
-  // The button itself is always shown (it's how sync gets set up in the
-  // first place); only the popover's contents change with the state.
-  accountBtn.hidden = false;
+async function initCloudSync() {
   cloudSync.onChange(({ configured, user }) => {
+    accountBtn.hidden = !configured;
     accountBtn.classList.toggle("is-synced", configured && Boolean(user));
     if (!configured) return;
     accountEmail.textContent = user ? user.email : "";
-    accountNotSetUp.hidden = true;
     accountSignedOut.hidden = Boolean(user);
     accountSignedIn.hidden = !user;
     if (user && !wasSignedIn) {
@@ -2892,23 +2885,22 @@ function initCloudSync() {
       wasSignedIn = false;
     }
   });
-  cloudSync.init();
+  await cloudSync.init();
 }
 
 function setAccountMenu(open) {
   accountMenu.hidden = !open;
   accountBtn.setAttribute("aria-expanded", String(open));
   if (!open) return;
-  const configured = cloudSync.isConfigured();
-  accountNotSetUp.hidden = configured;
-  accountSignedOut.hidden = !configured || Boolean(cloudSync.currentUserOrNull());
-  accountSignedIn.hidden = !configured || !cloudSync.currentUserOrNull();
-  if (cloudSync.currentUserOrNull()) syncStatusEl.textContent = "Up to date";
+  const signedIn = Boolean(cloudSync.currentUserOrNull());
+  accountSignedOut.hidden = signedIn;
+  accountSignedIn.hidden = !signedIn;
+  if (signedIn) syncStatusEl.textContent = "Up to date";
   const r = accountBtn.getBoundingClientRect();
   const width = accountMenu.offsetWidth;
   accountMenu.style.top = `${r.bottom + 8}px`;
   accountMenu.style.left = `${Math.max(12, Math.min(r.right - width, window.innerWidth - width - 12))}px`;
-  (configured ? (cloudSync.currentUserOrNull() ? signOutBtn : signInEmail) : syncUrlInput).focus();
+  (signedIn ? signOutBtn : signInEmail).focus();
 }
 
 accountBtn.addEventListener("click", () => setAccountMenu(accountMenu.hidden));
@@ -2921,23 +2913,6 @@ function setStatus(el, text, kind) {
   el.hidden = !text;
   el.className = `account-status${kind ? ` is-${kind}` : ""}`;
 }
-
-syncSetupForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  try {
-    cloudSync.setup(syncUrlInput.value, syncKeyInput.value);
-    syncUrlInput.value = syncKeyInput.value = "";
-    setStatus(syncSetupStatus, "", null);
-  } catch (err) {
-    setStatus(syncSetupStatus, err.message, "error");
-  }
-});
-
-syncForgetBtn.addEventListener("click", () => {
-  if (window.confirm("Stop syncing and forget this Supabase project? Your projects stay right here in this browser.")) {
-    cloudSync.forget();
-  }
-});
 
 signInForm.addEventListener("submit", async (e) => {
   e.preventDefault();

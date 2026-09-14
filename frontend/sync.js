@@ -1,13 +1,16 @@
 // A thin wrapper around Supabase (auth + a "projects" table) so projects
-// follow the user across devices. Entirely optional: with no project URL and
-// key saved, every function here is a no-op and the app works exactly as it
-// does with only the browser's own local storage. See the README for the
-// one-time Supabase setup (a free project, one SQL script, no coding).
+// follow a signed-in visitor across their own devices. The project URL and
+// anon key come from the server's own /api/health (set once, in the site's
+// own environment variables — see the README) — never asked of a visitor,
+// since one jokercad deployment has exactly one Supabase project behind it,
+// shared by everyone who signs in, each kept private by Supabase's Row Level
+// Security. With no SUPABASE_URL/SUPABASE_ANON_KEY set on the server, every
+// function here is a no-op and the app works exactly as it does with only
+// this browser's local storage.
 //
 // This file knows nothing about jokercad's own project shape — the caller
 // hands it a JSON-safe row to store and gets rows back to hydrate itself.
 
-const CONFIG_KEY = "jokercad-sync-config"; // { url, anonKey } in localStorage
 const TABLE = "projects";
 
 let client = null;
@@ -22,66 +25,26 @@ function state() {
   return { configured: Boolean(client), user: currentUser };
 }
 
-function loadConfig() {
+/** Fetches the server's sync config (if any) and connects. Call once at startup. */
+export async function init() {
+  let health;
   try {
-    const raw = localStorage.getItem(CONFIG_KEY);
-    return raw ? JSON.parse(raw) : null;
+    health = await (await fetch("/api/health")).json();
   } catch {
-    return null;
+    return state(); // offline or unreachable — the rest of the app already handles this
   }
-}
-
-function connect({ url, anonKey }) {
-  if (!window.supabase) {
-    // The CDN script (index.html) didn't load — sync stays off, nothing else breaks.
-    client = null;
-    return;
+  if (health.sync && health.sync.url && health.sync.anon_key && window.supabase) {
+    try {
+      client = window.supabase.createClient(health.sync.url, health.sync.anon_key);
+      client.auth.onAuthStateChange((_event, session) => {
+        currentUser = session ? { id: session.user.id, email: session.user.email } : null;
+        notify();
+      });
+    } catch {
+      client = null;
+    }
   }
-  try {
-    client = window.supabase.createClient(url, anonKey);
-  } catch {
-    client = null;
-    return;
-  }
-  client.auth.onAuthStateChange((_event, session) => {
-    currentUser = session ? { id: session.user.id, email: session.user.email } : null;
-    notify();
-  });
-}
-
-/** Restores a saved config (if any) and starts watching sign-in state. Call once at startup. */
-export function init() {
-  const config = loadConfig();
-  if (config) connect(config);
   return state();
-}
-
-/** Saves a Supabase project URL + anon key and connects. Throws on an obviously wrong value. */
-export function setup(url, anonKey) {
-  url = url.trim().replace(/\/+$/, "");
-  anonKey = anonKey.trim();
-  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(url)) {
-    throw new Error("That doesn't look like a Supabase project URL (should end in .supabase.co).");
-  }
-  if (anonKey.length < 20) throw new Error("That doesn't look like a valid anon key.");
-  if (!window.supabase) {
-    throw new Error("The sync library didn't load — check your connection (or an ad blocker) and reload the page.");
-  }
-  localStorage.setItem(CONFIG_KEY, JSON.stringify({ url, anonKey }));
-  connect({ url, anonKey });
-  if (!client) throw new Error("Couldn't connect. Double-check the URL and key and try again.");
-  notify();
-}
-
-/** Disconnects and forgets the saved project URL/key. Never touches local project data. */
-export function forget() {
-  if (client) client.auth.signOut().catch(() => {});
-  client = null;
-  currentUser = null;
-  try {
-    localStorage.removeItem(CONFIG_KEY);
-  } catch {}
-  notify();
 }
 
 export const isConfigured = () => Boolean(client);
@@ -96,7 +59,7 @@ export function onChange(fn) {
 
 /** Emails a sign-in link; the user finishes signing in by clicking it. */
 export async function signInWithEmail(email) {
-  if (!client) throw new Error("Sync isn't set up yet.");
+  if (!client) throw new Error("Sync isn't set up on this site.");
   const { error } = await client.auth.signInWithOtp({
     email,
     options: { emailRedirectTo: location.origin + location.pathname },

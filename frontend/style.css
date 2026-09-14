@@ -1918,14 +1918,12 @@ button {
   color: var(--accent-hover);
 }
 
-#syncSetupForm,
 #signInForm {
   display: flex;
   flex-direction: column;
   gap: 7px;
 }
 
-#syncSetupForm input,
 #signInForm input {
   height: 32px;
   padding: 0 10px;
@@ -1938,7 +1936,6 @@ button {
   outline: none;
 }
 
-#syncSetupForm input:focus,
 #signInForm input:focus {
   border-color: rgba(124, 108, 255, 0.55);
 }

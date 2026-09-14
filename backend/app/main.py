@@ -105,6 +105,12 @@ APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 GENERATIONS_PER_HOUR = int(os.getenv("GENERATIONS_PER_HOUR", "60"))
 ON_VERCEL = bool(os.getenv("VERCEL"))
 
+# Optional: cross-device project sync (see README). The anon key is meant to
+# be public — Supabase's Row Level Security is what actually protects each
+# signed-in visitor's own projects, not keeping this key secret.
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+
 # Kept in memory, so on serverless hosts the cap applies per running instance.
 _generation_times: deque[float] = deque()
 _generation_lock = threading.Lock()
@@ -469,7 +475,10 @@ def auth(request: Request):
 @app.get("/api/health")
 def health():
     configured = [p.name for p in router.providers if p.is_configured()]
-    return {"status": "ok", "providers_configured": configured, "auth_required": bool(APP_PASSWORD)}
+    resp = {"status": "ok", "providers_configured": configured, "auth_required": bool(APP_PASSWORD)}
+    if SUPABASE_URL and SUPABASE_ANON_KEY:
+        resp["sync"] = {"url": SUPABASE_URL, "anon_key": SUPABASE_ANON_KEY}
+    return resp
 
 
 _frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"

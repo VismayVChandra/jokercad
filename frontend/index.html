@@ -38,25 +38,13 @@
   </header>
 
   <div id="accountMenu" class="popover-menu account-menu" role="menu" hidden>
-    <div id="accountNotSetUp">
-      <p class="account-intro">Sync needs a free project at
-        <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a> — see the README for the
-        one-time setup (a few minutes, no coding).</p>
-      <form id="syncSetupForm">
-        <input id="syncUrlInput" type="url" placeholder="Project URL" required aria-label="Supabase project URL" />
-        <input id="syncKeyInput" type="text" placeholder="anon public key" required aria-label="Supabase anon key" />
-        <button type="submit" class="primary-btn">Save</button>
-      </form>
-      <p id="syncSetupStatus" class="account-status" hidden></p>
-    </div>
-    <div id="accountSignedOut" hidden>
+    <div id="accountSignedOut">
       <p class="account-intro">Sign in to keep your projects in sync across your devices.</p>
       <form id="signInForm">
         <input id="signInEmail" type="email" autocomplete="email" placeholder="you@example.com" required aria-label="Email address" />
         <button type="submit" id="signInBtn" class="primary-btn">Send magic link</button>
       </form>
       <p id="signInStatus" class="account-status" hidden></p>
-      <button type="button" id="syncForgetBtn" class="text-btn">Use a different project</button>
     </div>
     <div id="accountSignedIn" hidden>
       <p class="account-email" id="accountEmail"></p>
