@@ -2875,8 +2875,11 @@ importInput.addEventListener("change", async () => {
 let wasSignedIn = false;
 
 function initCloudSync() {
+  // The button itself is always shown (it's how sync gets set up in the
+  // first place); only the popover's contents change with the state.
+  accountBtn.hidden = false;
   cloudSync.onChange(({ configured, user }) => {
-    accountBtn.hidden = !configured;
+    accountBtn.classList.toggle("is-synced", configured && Boolean(user));
     if (!configured) return;
     accountEmail.textContent = user ? user.email : "";
     accountNotSetUp.hidden = true;

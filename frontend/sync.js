@@ -64,8 +64,12 @@ export function setup(url, anonKey) {
     throw new Error("That doesn't look like a Supabase project URL (should end in .supabase.co).");
   }
   if (anonKey.length < 20) throw new Error("That doesn't look like a valid anon key.");
+  if (!window.supabase) {
+    throw new Error("The sync library didn't load — check your connection (or an ad blocker) and reload the page.");
+  }
   localStorage.setItem(CONFIG_KEY, JSON.stringify({ url, anonKey }));
   connect({ url, anonKey });
+  if (!client) throw new Error("Couldn't connect. Double-check the URL and key and try again.");
   notify();
 }
 
