@@ -44,6 +44,7 @@ const measureBtn = document.getElementById("measureBtn");
 const exportBtn = document.getElementById("exportBtn");
 const exportMenu = document.getElementById("exportMenu");
 const shareBtn = document.getElementById("shareBtn");
+const arBtn = document.getElementById("arBtn");
 const sectionBar = document.getElementById("sectionBar");
 const sectionSlider = document.getElementById("sectionSlider");
 const sectionValue = document.getElementById("sectionValue");
@@ -118,6 +119,13 @@ const drawingSheet = document.getElementById("drawingSheet");
 const drawingSvgBtn = document.getElementById("drawingSvgBtn");
 const drawingPdfBtn = document.getElementById("drawingPdfBtn");
 const drawingCloseBtn = document.getElementById("drawingCloseBtn");
+const arModal = document.getElementById("arModal");
+const arViewer = document.getElementById("arViewer");
+const arCloseBtn = document.getElementById("arCloseBtn");
+const arQrCard = document.getElementById("arQrCard");
+const arQrBox = document.getElementById("arQrBox");
+const arQrHint = document.getElementById("arQrHint");
+const arCopyLinkBtn = document.getElementById("arCopyLinkBtn");
 const compareBtn = document.getElementById("compareBtn");
 const compareCard = document.getElementById("compareCard");
 const compareCloseBtn = document.getElementById("compareCloseBtn");
@@ -1263,6 +1271,23 @@ function exportPng() {
   downloadHref(url, `${exportName()}.png`);
 }
 
+// The active model as a GLB blob: written straight from the viewer's scene
+// for an assembly (in metres, like any glTF), or the active version's
+// already-built bytes for a single part. Shared by GLB export and AR.
+async function currentGlbBlob() {
+  if (assembly.on) {
+    const glb = await withExplodedOff(() => {
+      const root = new THREE.Group();
+      root.add(assembly.root.clone());
+      root.scale.setScalar(0.001);
+      return new GLTFExporter().parseAsync(root, { binary: true });
+    });
+    return new Blob([glb], { type: "model/gltf-binary" });
+  }
+  const version = versions[activeVersion];
+  return version ? new Blob([version.glbBytes], { type: "model/gltf-binary" }) : null;
+}
+
 const EXPORTERS = {
   step: exportStep,
   drawing: openDrawing,
@@ -1271,19 +1296,8 @@ const EXPORTERS = {
     downloadBlob(new Blob([stl], { type: "model/stl" }), `${exportName()}.stl`);
   },
   glb: async () => {
-    if (assembly.on) {
-      // Written from the viewer's scene, in metres like any glTF.
-      const glb = await withExplodedOff(() => {
-        const root = new THREE.Group();
-        root.add(assembly.root.clone());
-        root.scale.setScalar(0.001);
-        return new GLTFExporter().parseAsync(root, { binary: true });
-      });
-      downloadBlob(new Blob([glb], { type: "model/gltf-binary" }), `${exportName()}.glb`);
-      return;
-    }
-    const version = versions[activeVersion];
-    if (version) downloadBlob(new Blob([version.glbBytes], { type: "model/gltf-binary" }), `${exportName()}.glb`);
+    const blob = await currentGlbBlob();
+    if (blob) downloadBlob(blob, `${exportName()}.glb`);
   },
   obj: () => {
     const obj = withExplodedOff(() => new OBJExporter().parse(exportRoot()));
@@ -1404,11 +1418,13 @@ async function buildSharedPart(code) {
 
 // Building a shared part runs its code on the server, and a link can come from
 // anyone, so it only happens when the person opening it asks, after they've
-// had the chance to read the code.
+// had the chance to read the code. A link from the AR button's QR code adds
+// ?ar=1, so building it drops straight into AR instead of the normal chat.
 async function offerSharedPart() {
   if (!location.hash.startsWith(SHARE_PREFIX)) return;
   const packed = location.hash.slice(SHARE_PREFIX.length);
-  history.replaceState(null, "", location.pathname + location.search);
+  const wantsAr = new URLSearchParams(location.search).get("ar") === "1";
+  history.replaceState(null, "", location.pathname);
 
   let code;
   try {
@@ -1425,20 +1441,149 @@ async function offerSharedPart() {
   codeView.textContent = code;
   const card = document.createElement("div");
   card.className = "entry entry-share";
-  card.innerHTML =
-    '<div class="share-title">Someone shared a part with you</div>' +
-    "<p>Building it runs the part's code on the server. You can read the code first.</p>" +
-    '<div class="share-actions"><button type="button" class="text-btn">View code</button>' +
-    '<button type="button" class="primary-btn">Build it</button></div>';
+  card.innerHTML = wantsAr
+    ? '<div class="share-title">View this part in AR</div>' +
+      "<p>Building it runs the part's code on the server, then opens it in AR. You can read the code first.</p>" +
+      '<div class="share-actions"><button type="button" class="text-btn">View code</button>' +
+      '<button type="button" class="primary-btn">View in AR</button></div>'
+    : '<div class="share-title">Someone shared a part with you</div>' +
+      "<p>Building it runs the part's code on the server. You can read the code first.</p>" +
+      '<div class="share-actions"><button type="button" class="text-btn">View code</button>' +
+      '<button type="button" class="primary-btn">Build it</button></div>';
   chatLog.appendChild(card);
   const [viewBtn, buildBtn] = card.querySelectorAll("button");
   viewBtn.addEventListener("click", () => setCodeDrawer(true));
   buildBtn.addEventListener("click", async () => {
     buildBtn.disabled = true;
-    if (await buildSharedPart(code)) card.remove();
-    else buildBtn.disabled = false;
+    const ok = await buildSharedPart(code);
+    if (!ok) {
+      buildBtn.disabled = false;
+      return;
+    }
+    card.remove();
+    if (wantsAr) {
+      const blob = await currentGlbBlob();
+      if (blob) openArModal(blob, { shareable: false });
+    }
   });
 }
+
+/* ---------------- view in AR ---------------- */
+
+let modelViewerReady = null;
+function ensureModelViewer() {
+  if (!modelViewerReady) {
+    modelViewerReady = new Promise((resolve, reject) => {
+      if (customElements.get("model-viewer")) {
+        resolve();
+        return;
+      }
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = "https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Couldn't load the AR viewer."));
+      document.head.appendChild(script);
+    });
+  }
+  return modelViewerReady;
+}
+
+let qrLibReady = null;
+function ensureQrLib() {
+  if (!qrLibReady) {
+    qrLibReady = new Promise((resolve, reject) => {
+      if (window.qrcode) {
+        resolve();
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Couldn't load the QR code."));
+      document.head.appendChild(script);
+    });
+  }
+  return qrLibReady;
+}
+
+function isHandheld() {
+  return matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad/i.test(navigator.userAgent);
+}
+
+let arBlobUrl = null;
+
+// shareable: whether this part has a single script a QR code can carry (not
+// an assembly), so a desktop viewer can offer "scan to view on your phone".
+async function openArModal(blob, { shareable }) {
+  try {
+    await ensureModelViewer();
+  } catch (err) {
+    showToast(err.message);
+    return;
+  }
+  if (arBlobUrl) URL.revokeObjectURL(arBlobUrl);
+  arBlobUrl = URL.createObjectURL(blob);
+  arViewer.setAttribute("src", arBlobUrl);
+  arModal.hidden = false;
+  arQrCard.hidden = true;
+  if (!isHandheld()) {
+    if (shareable) {
+      arCopyLinkBtn.hidden = false;
+      buildArQr().catch(() => {});
+    } else {
+      arCopyLinkBtn.hidden = true;
+      arQrHint.textContent = "Open jokercad on your phone to view this in AR.";
+      arQrBox.replaceChildren();
+      arQrCard.hidden = false;
+    }
+  }
+}
+
+function closeArModal() {
+  arModal.hidden = true;
+  arViewer.removeAttribute("src");
+  if (arBlobUrl) {
+    URL.revokeObjectURL(arBlobUrl);
+    arBlobUrl = null;
+  }
+}
+
+async function buildArQr() {
+  const url = `${location.origin}${location.pathname}?ar=1${SHARE_PREFIX}${await packCode(currentCode)}`;
+  try {
+    await ensureQrLib();
+    const qr = window.qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    arQrBox.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2 });
+  } catch {
+    arQrBox.textContent = url;
+  }
+  arQrHint.textContent = "Scan with your phone's camera to view this in AR.";
+  arQrCard.hidden = false;
+}
+
+arBtn.addEventListener("click", async () => {
+  const blob = await currentGlbBlob();
+  if (!blob) return;
+  openArModal(blob, { shareable: !assembly.on && Boolean(currentCode) });
+});
+
+arCloseBtn.addEventListener("click", closeArModal);
+arModal.addEventListener("click", (e) => {
+  if (e.target === arModal) closeArModal();
+});
+
+arCopyLinkBtn.addEventListener("click", async () => {
+  const url = `${location.origin}${location.pathname}?ar=1${SHARE_PREFIX}${await packCode(currentCode)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("AR link copied.");
+  } catch {
+    window.prompt("Copy this link to view the part in AR:", url);
+  }
+});
 
 /* ---------------- pictures ---------------- */
 
@@ -4127,7 +4272,8 @@ const VIEW_KEYS = { 1: "iso", 2: "top", 3: "front", 4: "right" };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     // Closes the most recently opened thing first.
-    if (!drawingModal.hidden) drawingModal.hidden = true;
+    if (!arModal.hidden) closeArModal();
+    else if (!drawingModal.hidden) drawingModal.hidden = true;
     else if (!editPopup.hidden) closeEditPopup();
     else if (!exportMenu.hidden) setExportMenu(false);
     else if (!projectMenu.hidden) setProjectMenu(false);

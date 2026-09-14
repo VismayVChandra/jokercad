@@ -50,6 +50,13 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   3D apps, and **DXF** for laser or CNC cutting — the outline visible from
   whichever camera view is active (Top by default), as plain line entities in
   millimetres.
+- **View in AR**: see the part full size in your own space. On a phone it
+  opens straight into AR; on a computer it shows a QR code to scan, which
+  opens the same part in AR on whichever phone scans it — no app needed
+  (`<model-viewer>`, loaded only when you click it). Works on Android
+  (Chrome, via Scene Viewer or WebXR); on iPhone it shows an interactive 3D
+  preview instead of true AR, since Apple's AR Quick Look needs a USDZ file,
+  which jokercad doesn't generate.
 - **Fit** (under the chat box): press, sliding or loose, for printed or
   machined parts. Every prompt tells the model the clearance to use between
   holes and what goes in them, kept as an editable `clearance` parameter.

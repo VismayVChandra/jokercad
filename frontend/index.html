@@ -98,6 +98,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
       <span>Share</span>
     </button>
+    <button type="button" id="arBtn" class="tool-btn model-tool" title="View this part in AR on your phone" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M11 18h2"/></svg>
+      <span>AR</span>
+    </button>
     <div class="tool-divider"></div>
     <button type="button" id="codeToggleBtn" class="tool-btn" title="View generated code">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18-6-6 6-6"/><path d="m15 6 6 6-6 6"/></svg>
@@ -409,6 +413,33 @@
         </div>
       </div>
       <div id="drawingPreview" class="drawing-preview"></div>
+    </div>
+  </div>
+
+  <div id="arModal" class="modal" hidden>
+    <div class="modal-card ar-modal-card">
+      <div class="modal-header">
+        <span class="params-title">View in AR</span>
+        <button type="button" id="arCloseBtn" class="icon-btn" title="Close (Esc)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="ar-body">
+        <model-viewer
+          id="arViewer"
+          ar
+          ar-modes="webxr scene-viewer quick-look"
+          camera-controls
+          touch-action="pan-y"
+          shadow-intensity="1"
+          exposure="1"
+        ></model-viewer>
+        <div id="arQrCard" class="ar-qr-card" hidden>
+          <div id="arQrBox" class="ar-qr-box"></div>
+          <p id="arQrHint"></p>
+          <button type="button" id="arCopyLinkBtn" class="text-btn">Copy link instead</button>
+        </div>
+      </div>
     </div>
   </div>
 
