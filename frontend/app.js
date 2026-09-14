@@ -40,6 +40,7 @@ const copyCodeBtn = document.getElementById("copyCodeBtn");
 const wireframeBtn = document.getElementById("wireframeBtn");
 const sectionBtn = document.getElementById("sectionBtn");
 const organicBtn = document.getElementById("organicBtn");
+const motionBtn = document.getElementById("motionBtn");
 const measureBtn = document.getElementById("measureBtn");
 const exportBtn = document.getElementById("exportBtn");
 const exportMenu = document.getElementById("exportMenu");
@@ -666,9 +667,19 @@ function showVersion(index, reframe) {
   codeView.textContent = version.code;
   modelTools.forEach((btn) => (btn.disabled = false));
   compareBtn.disabled = versions.length < 2; // nothing to compare with just one version
+  updateMotionBtn();
   renderParams(version.code);
   loadModel(version.glbBytes, reframe, version.parts, version.motion);
   if (narrowScreen.matches) setPanelCollapsed(true);
+}
+
+// Only worth offering on an assembly (several labelled parts) that doesn't
+// already have a working motion rig — a plain solid has nothing to animate,
+// and once motion works the Motion card's own slider takes over.
+function updateMotionBtn() {
+  const version = versions[activeVersion];
+  const isAssembly = Boolean(version && version.parts && version.parts.length > 1);
+  motionBtn.disabled = assembly.on || !isAssembly || Boolean(motion.rig);
 }
 
 function setBusy(on, label = "") {
@@ -995,6 +1006,22 @@ const ORGANIC_LABEL = "✨ Make it organic";
 
 organicBtn.addEventListener("click", () => {
   if (!busy && !assembly.on && versions.length) runPrompt(ORGANIC_PROMPT, ORGANIC_LABEL);
+});
+
+// Asked of the model by the Motion button, for an assembly that doesn't yet
+// have a working `motion` dict — same one-click idea as Organic, so the user
+// never has to type this out by hand.
+const MOTION_PROMPT =
+  "Add a `motion` dict so this can be animated with the app's Motion slider. Pick the part that stays " +
+  "fixed as the ground, and add one joint per part that should move: its pivot point (or slide axis and " +
+  "direction) and a drive value, so dragging the slider moves every joint together — the same shape as the " +
+  "clamp example (ground, joints with parts/pivot/drive, attached, range). Every part meant to move needs " +
+  "its own joint, or the slider won't move it. Keep every part, dimension and feature exactly as it is now; " +
+  "only add the motion dict, and any solids it needs (like pins) that aren't already there.";
+const MOTION_LABEL = "🔩 Add motion";
+
+motionBtn.addEventListener("click", () => {
+  if (!busy && !assembly.on && versions.length) runPrompt(MOTION_PROMPT, MOTION_LABEL);
 });
 
 // shownAs: what the chat shows for the prompt, when not the prompt itself.
@@ -2739,6 +2766,7 @@ function resetMotion() {
   stopMotion(false);
   motion.rig = null;
   motionCard.hidden = true;
+  updateMotionBtn();
 }
 
 // spec: the `motion` dict from the part's code, as the server passed it on.
@@ -2766,6 +2794,7 @@ function setupMotion(model, parts, spec) {
   motionHint.textContent = MOTION_HINT;
   showMotionValue();
   motionCard.hidden = false;
+  updateMotionBtn();
 }
 
 function showMotionValue() {
@@ -3527,7 +3556,7 @@ async function rebuildAssembly(reframe) {
   modelTools.forEach((btn) => (btn.disabled = !root.children.length));
   shareBtn.disabled = true;
   // Part-only tools: they work on one part's code.
-  editBtn.disabled = printBtn.disabled = organicBtn.disabled = compareBtn.disabled = true;
+  editBtn.disabled = printBtn.disabled = organicBtn.disabled = compareBtn.disabled = motionBtn.disabled = true;
   paramsCard.hidden = true;
   partsCard.hidden = true;
   applyJoints();

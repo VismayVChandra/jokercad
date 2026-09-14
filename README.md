@@ -69,7 +69,11 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   (the fixed part, pin and slide joints, which joint the slider drives), and
   the Motion card's slider or ▶ Play moves the parts. A small solver
   (`frontend/motion.js`) keeps every pin joined, so linkages follow correctly,
-  and stops where the mechanism can't physically go any further.
+  and stops where the mechanism can't physically go any further. If an
+  assembly built without one (an older part, from before generation started
+  requiring it), the toolbar's **Motion** button sends a one-click prompt
+  asking for it — the same idea as the **Organic** button — instead of typing
+  it out by hand each time.
 - **Section view** (`S`): cut the part open along X, Y or Z to see bores and
   wall thicknesses.
 - **Measure** (`M`): click two points for the distance and its X/Y/Z
