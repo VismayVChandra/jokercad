@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .validator import UnsafeCode, validate_code
+
 # The first build123d/OCP import in a fresh process can take 60-90s on Windows
 # (antivirus scanning the native OpenCascade DLLs); later runs take seconds.
 EXECUTION_TIMEOUT_SECONDS = 120
@@ -24,11 +26,34 @@ _PARTS_LIBRARY = Path(__file__).with_name("parts_library.py")
 
 _CODE_FENCE_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
 
-_FORBIDDEN_TOKENS = ("import os", "import sys", "subprocess", "__import__", "open(", "eval(", "exec(", "socket")
-
 _SECRET_ENV_NAME = re.compile(r"KEY|SECRET|TOKEN|PASSWORD", re.IGNORECASE)
 
+# Ceilings the child puts on itself before any model-written code runs (POSIX
+# only; Windows has no `resource` module, so local development goes without).
+# A process can lower a hard limit but not raise it again, so code running
+# later in the script cannot undo these.
+#
+# CPU seconds: stops a runaway loop burning the box without waiting out the
+# wall-clock timeout.
+CAD_CPU_SECONDS = int(os.getenv("CAD_CPU_SECONDS", str(EXECUTION_TIMEOUT_SECONDS)))
+# Largest file the child may write. Real output is a few MB; this stops a
+# script filling the disk.
+CAD_MAX_FILE_MB = int(os.getenv("CAD_MAX_FILE_MB", "64"))
+# Processes/threads for this user. Generous, because OpenCascade uses threads;
+# a fork bomb reaches it immediately, ordinary work never does.
+CAD_MAX_PROCESSES = int(os.getenv("CAD_MAX_PROCESSES", "256"))
+# Address-space ceiling, off by default: OpenCascade reserves a lot of virtual
+# memory it never commits, and too low a value breaks legitimate builds. Set
+# CAD_MEMORY_LIMIT_MB on a host where memory exhaustion matters more.
+CAD_MEMORY_LIMIT_MB = int(os.getenv("CAD_MEMORY_LIMIT_MB", "0"))
+
+# Refuse to read a result bigger than this into memory. The API caps GLB at
+# 3 MB and STEP at 4 MB further up; this is the backstop that keeps a script
+# that wrote a huge file from turning into an out-of-memory crash here.
+_MAX_RESULT_BYTES = 64 * 1024 * 1024
+
 _RUNNER_TEMPLATE = """\
+{limits_code}
 try:
     from build123d import *
     from jokercad_parts import *
@@ -96,6 +121,32 @@ except Exception:
 _STEP_EXPORT = """\
 from build123d import export_step
 export_step(result, r"{step_path}")
+"""
+
+# Runs first, before the CAD engine or any model-written code is loaded. Each
+# limit is applied on its own: a kernel that doesn't offer one shouldn't cost
+# us the others.
+_LIMITS_CODE = """\
+try:
+    import resource as _rlimit
+    for _name, _value in (
+        ("RLIMIT_CPU", {cpu_seconds}),
+        ("RLIMIT_FSIZE", {file_bytes}),
+        ("RLIMIT_NPROC", {max_processes}),
+        ("RLIMIT_AS", {memory_bytes}),
+    ):
+        if not _value:
+            continue
+        _which = getattr(_rlimit, _name, None)
+        if _which is None:
+            continue
+        try:
+            _rlimit.setrlimit(_which, (_value, _value))
+        except (ValueError, OSError):
+            pass
+    del _rlimit
+except ImportError:
+    pass
 """
 
 # Measures the built part for the review step: its overall size, and for an
@@ -204,10 +255,16 @@ def _child_env() -> dict[str, str]:
 
 
 def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
-    """Runs model-written code; with step=True, also exports the part as STEP."""
-    for token in _FORBIDDEN_TOKENS:
-        if token in code:
-            return ExecutionResult(ok=False, code=code, error=f"Generated code contains disallowed token: {token!r}")
+    """Runs model-written code; with step=True, also exports the part as STEP.
+
+    The code is untrusted: `validate_code` rejects anything beyond building a
+    part, and the script then limits itself (CPU, file size, processes) before
+    the CAD engine loads. See `validator.py` for what that does and doesn't buy.
+    """
+    try:
+        validate_code(code)
+    except UnsafeCode as e:
+        return ExecutionResult(ok=False, code=code, error=str(e))
 
     # A throwaway directory per run: on serverless hosts only the temp dir is
     # writable, and nothing needs to outlive the request.
@@ -227,6 +284,12 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
                 engine_exit=_ENGINE_UNAVAILABLE_EXIT,
                 stats_code=_STATS_CODE,
                 step_export=_STEP_EXPORT.format(step_path=step_path) if step else "",
+                limits_code=_LIMITS_CODE.format(
+                    cpu_seconds=CAD_CPU_SECONDS,
+                    file_bytes=CAD_MAX_FILE_MB * 1024 * 1024,
+                    max_processes=CAD_MAX_PROCESSES,
+                    memory_bytes=CAD_MEMORY_LIMIT_MB * 1024 * 1024,
+                ),
             ),
             encoding="utf-8",
         )
@@ -257,20 +320,34 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
         if not glb_path.exists():
             return ExecutionResult(ok=False, code=code, error="Script ran but did not produce a GLB file.")
 
-        stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else None
-        step_bytes = step_path.read_bytes() if step and step_path.exists() else None
+        try:
+            glb_bytes = _read_capped(glb_path, "model")
+            step_bytes = _read_capped(step_path, "STEP file") if step and step_path.exists() else None
+            stats_text = _read_capped(stats_path, "measurements") if stats_path.exists() else None
+        except ValueError as e:
+            return ExecutionResult(ok=False, code=code, error=str(e))
+
+        stats = json.loads(stats_text.decode("utf-8")) if stats_text else None
         return ExecutionResult(
             ok=True,
             code=code,
-            glb_bytes=glb_path.read_bytes(),
+            glb_bytes=glb_bytes,
             stats=stats or None,
             step_bytes=step_bytes,
             mesh=_load_mesh(mesh_path),
         )
 
 
+def _read_capped(path: Path, label: str) -> bytes:
+    """Reads a result file, refusing one too big to hold in memory."""
+    size = path.stat().st_size
+    if size > _MAX_RESULT_BYTES:
+        raise ValueError(f"The generated {label} is too large ({size // (1024 * 1024)} MB). Try a simpler part.")
+    return path.read_bytes()
+
+
 def _load_mesh(path: Path) -> list | None:
-    if not path.exists():
+    if not path.exists() or path.stat().st_size > _MAX_RESULT_BYTES:
         return None
     try:
         with np.load(path) as data:

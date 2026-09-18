@@ -1,0 +1,4 @@
+# Test-only dependencies. Kept out of requirements.txt so the deployed bundle
+# (already ~720 MB, against Vercel's 5 GB Large Functions ceiling) stays lean.
+-r requirements.txt
+pytest>=8.0
