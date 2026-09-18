@@ -24,7 +24,14 @@ _ENGINE_UNAVAILABLE_EXIT = 97
 # (e.g. spur_gear) are available to generated code.
 _PARTS_LIBRARY = Path(__file__).with_name("parts_library.py")
 
-_CODE_FENCE_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
+_PYTHON_FENCE_RE = re.compile(r"```python\s*\n(.*?)```", re.DOTALL)
+_JSON_FENCE_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
+_ANY_FENCE_RE = re.compile(r"```(?:\w+)?\s*\n(.*?)```", re.DOTALL)
+
+# Caps on the model-declared spec before it is stored or shown: it is model
+# output, so it gets bounded like any other untrusted text.
+_MAX_SPEC_ITEMS = 24
+_MAX_SPEC_TEXT = 400
 
 _SECRET_ENV_NAME = re.compile(r"KEY|SECRET|TOKEN|PASSWORD", re.IGNORECASE)
 
@@ -187,7 +194,93 @@ def _jokercad_stats(result):
                     overlaps.append([parts[i]["name"], parts[j]["name"], shared])
         stats["parts"] = parts
         stats["overlaps"] = overlaps
+    try:
+        stats["measured"] = _jokercad_measure(result)
+    except Exception:
+        pass
     return stats
+
+
+def _jokercad_measure(result):
+    """Real measurements read back off the built solid.
+
+    Everything here is queried from the geometry itself, so the self-check and
+    the inspector never show a number the model merely claimed. Wrapped by the
+    caller: a measurement that fails must never cost the user their part.
+    """
+    faces = result.faces()
+    measured = {
+        "area": result.area,
+        "faces": len(faces),
+        "edges": len(result.edges()),
+        "vertices": len(result.vertices()),
+        "shells": len(result.shells()),
+        "valid": bool(result.is_valid),
+        "degenerate_faces": sum(1 for f in faces if f.area < 1e-9),
+    }
+    try:
+        measured["holes"] = _jokercad_round_features(result)
+    except Exception:
+        pass
+    return measured
+
+
+def _jokercad_round_features(result):
+    """Every cylindrical face, told apart as a hole or a boss.
+
+    A hole's outward normal (out of the solid) points back toward its own axis;
+    a boss's points away from it. Faces sharing an axis and diameter are one
+    feature: a bore can be split into several faces by whatever else touches it.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+
+    found = {}
+    for face in result.faces().filter_by(GeomType.CYLINDER):
+        cylinder = BRepAdaptor_Surface(face.wrapped).Cylinder()
+        axis = cylinder.Axis()
+        origin, direction = axis.Location(), axis.Direction()
+        radius = cylinder.Radius()
+
+        point = face.center()
+        normal = face.normal_at(point)
+        offset = (point.X - origin.X(), point.Y - origin.Y(), point.Z - origin.Z())
+        along = sum(o * d for o, d in zip(offset, (direction.X(), direction.Y(), direction.Z())))
+        radial = [o - along * d for o, d in zip(offset, (direction.X(), direction.Y(), direction.Z()))]
+        outward = radial[0] * normal.X + radial[1] * normal.Y + radial[2] * normal.Z
+
+        # A cylinder's axis may be reported pointing either way, from any point
+        # along it. Normalise both so one physical hole is one entry: flip the
+        # direction to a canonical sign, and name the axis by its closest point
+        # to the origin rather than by whichever point OpenCascade handed back.
+        axis_dir = [direction.X(), direction.Y(), direction.Z()]
+        if [round(v, 6) for v in axis_dir] < [0.0, 0.0, 0.0]:
+            axis_dir = [-v for v in axis_dir]
+        start = (origin.X(), origin.Y(), origin.Z())
+        from_origin = sum(s * d for s, d in zip(start, axis_dir))
+        on_axis = [s - from_origin * d for s, d in zip(start, axis_dir)]
+
+        key = (round(radius, 4), tuple(round(v, 3) for v in axis_dir), tuple(round(v, 3) for v in on_axis))
+        entry = found.get(key)
+        if entry is None:
+            entry = {
+                "diameter": 2 * radius,
+                "kind": "boss" if outward > 0 else "hole",
+                "axis": [round(v, 4) for v in axis_dir],
+                "at": [round(v, 3) for v in on_axis],
+                "face_area": 0.0,
+            }
+            found[key] = entry
+        entry["face_area"] += face.area
+
+    features = []
+    for entry in found.values():
+        # Exact for a full cylinder: area = 2 * pi * r * height.
+        height = entry.pop("face_area") / (math.pi * entry["diameter"]) if entry["diameter"] else 0.0
+        entry["height"] = round(height, 3)
+        entry["diameter"] = round(entry["diameter"], 4)
+        features.append(entry)
+    features.sort(key=lambda f: (f["kind"], -f["diameter"], f["at"]))
+    return features
 
 
 def _jokercad_motion(spec):
@@ -231,8 +324,51 @@ class ExecutionResult:
 
 
 def extract_code(llm_text: str) -> str:
-    match = _CODE_FENCE_RE.search(llm_text)
-    return match.group(1).strip() if match else llm_text.strip()
+    """The Python block from a reply that may also carry a JSON intent block.
+
+    A `python`-tagged fence wins outright; without one, any fence that isn't the
+    JSON spec is taken, so replies from before the spec existed still work.
+    """
+    match = _PYTHON_FENCE_RE.search(llm_text)
+    if match:
+        return match.group(1).strip()
+    without_spec = _JSON_FENCE_RE.sub("", llm_text)
+    match = _ANY_FENCE_RE.search(without_spec)
+    return match.group(1).strip() if match else without_spec.strip()
+
+
+def extract_spec(llm_text: str) -> dict | None:
+    """The declared design intent, or None when the model didn't give usable JSON.
+
+    Never raises: a missing or malformed spec costs the self-check, not the part.
+    """
+    match = _JSON_FENCE_RE.search(llm_text)
+    if not match:
+        return None
+    try:
+        spec = json.loads(match.group(1))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return _trim_spec(spec) if isinstance(spec, dict) else None
+
+
+def _trim_spec(spec: dict) -> dict:
+    """Bounds a model-written spec so it can't bloat storage or a response."""
+
+    def clean(value, depth=0):
+        if depth > 4:
+            return None
+        if isinstance(value, str):
+            return value[:_MAX_SPEC_TEXT]
+        if isinstance(value, bool) or isinstance(value, (int, float)) or value is None:
+            return value
+        if isinstance(value, list):
+            return [clean(v, depth + 1) for v in value[:_MAX_SPEC_ITEMS]]
+        if isinstance(value, dict):
+            return {str(k)[:80]: clean(v, depth + 1) for k, v in list(value.items())[:_MAX_SPEC_ITEMS]}
+        return None
+
+    return {str(k)[:80]: clean(v) for k, v in list(spec.items())[:_MAX_SPEC_ITEMS]}
 
 
 def _child_env() -> dict[str, str]:

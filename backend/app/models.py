@@ -24,6 +24,9 @@ class GenerateRequest(BaseModel):
 
 class RunRequest(BaseModel):
     code: str = Field(max_length=20000)
+    # The design intent this code belongs to, sent back by the browser so a
+    # rebuilt part (a parameter edit) is measured against the same intent.
+    spec: dict | None = None
 
 
 class PlanRequest(BaseModel):
@@ -55,3 +58,10 @@ class GenerateResponse(BaseModel):
     parts: list[str] | None = None
     # How an assembly's parts move (the code's `motion` dict), for the motion slider.
     motion: dict | None = None
+    # What the model said it was building, before it wrote the code (see prompts.py).
+    # None for a rebuild, or when the model didn't return usable JSON.
+    spec: dict | None = None
+    # The measured solid diffed against that spec (see cad/selfcheck.py), plus the
+    # raw measurements the inspector shows. None when there was nothing to check.
+    check: dict | None = None
+    measured: dict | None = None

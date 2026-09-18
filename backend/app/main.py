@@ -18,8 +18,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .cad.executor import ExecutionResult, extract_code, run_build123d_code
+from .cad.executor import ExecutionResult, extract_code, extract_spec, run_build123d_code
 from .cad.prompts import PLAN_SYSTEM_PROMPT, SYSTEM_PROMPT, build_repair_prompt, parse_plan
+from .cad.selfcheck import check_part
 from .cad.render import render_views
 from .cad.review import REVIEW_PROMPT, VISUAL_REVIEW_PROMPT, build_review_request, parse_verdict
 from .llm.router import LLMRouter, RouterExhaustedError
@@ -333,7 +334,12 @@ def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[d
 
 
 def _model_response(
-    glb_bytes: bytes, code: str, provider_used: str | None, attempts: int, stats: dict | None = None
+    glb_bytes: bytes,
+    code: str,
+    provider_used: str | None,
+    attempts: int,
+    stats: dict | None = None,
+    spec: dict | None = None,
 ) -> GenerateResponse:
     if len(glb_bytes) > MAX_GLB_BYTES:
         return GenerateResponse(
@@ -351,7 +357,15 @@ def _model_response(
         attempts=attempts,
         parts=(stats or {}).get("assembly"),
         motion=(stats or {}).get("motion"),
+        spec=spec,
+        measured=(stats or {}).get("measured"),
     )
+
+
+def _check_summary(report) -> str:
+    """One line naming what the measurements disagreed with, for the chat."""
+    listed = "; ".join(f"{c.name} (wanted {c.expected}, built {c.actual})" for c in report.failures[:3])
+    return f"Measured the finished part and it doesn't match the request: {listed}."
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -390,6 +404,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
     provider_used = None
     code = None
+    spec = None
     last_error = None
     # The latest part that built but that the review objected to. It's returned,
     # with the objection as a note, if no later attempt does better.
@@ -404,6 +419,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                 return flagged or GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
 
             code = extract_code(text)
+            spec = extract_spec(text) or spec
 
             missing = next((message for has, message in required_features if not has(code)), None)
             if missing:
@@ -416,7 +432,27 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
             if result.ok:
                 logger.info("provider=%s attempt=%d ok (%d bytes)", provider_used, attempt, len(result.glb_bytes))
-                response = _model_response(result.glb_bytes, code, provider_used, attempt, result.stats)
+                response = _model_response(result.glb_bytes, code, provider_used, attempt, result.stats, spec)
+
+                # Measurements taken off the solid, diffed against what the model
+                # said it would build. Deterministic and free, so it runs before
+                # the review does — a wrong hole count shouldn't cost an LLM call.
+                report = check_part(spec, result.stats) if response.ok else None
+                if report:
+                    response.check = report.as_dict()
+                if report and not report.ok:
+                    logger.info(
+                        "provider=%s attempt=%d self-check failed: %s",
+                        provider_used,
+                        attempt,
+                        "; ".join(c.name for c in report.failures)[:120],
+                    )
+                    response.note = _check_summary(report)
+                    flagged = response
+                    last_error = report.repair_hint()
+                    messages = _repair_messages(base_messages, code, last_error)
+                    continue
+
                 problem = _review_part(requests_so_far, result, review_notes, image) if response.ok else None
                 if not problem:
                     return response
@@ -486,9 +522,19 @@ def run(req: RunRequest, request: Request) -> GenerateResponse:
     _consume_generation_slot()
 
     result = run_build123d_code(req.code)
-    if result.ok:
-        return _model_response(result.glb_bytes, req.code, None, 0, result.stats)
-    return GenerateResponse(ok=False, code=req.code, error=result.error)
+    if not result.ok:
+        return GenerateResponse(ok=False, code=req.code, error=result.error)
+
+    response = _model_response(result.glb_bytes, req.code, None, 0, result.stats, req.spec)
+    # A parameter edit changes the geometry, so it is measured again against the
+    # intent it started from. Nothing is repaired here: the user asked for this
+    # exact value, so a mismatch is reported rather than silently corrected.
+    report = check_part(req.spec, result.stats) if response.ok else None
+    if report:
+        response.check = report.as_dict()
+        if not report.ok:
+            response.note = _check_summary(report)
+    return response
 
 
 @app.post("/api/export/step")
