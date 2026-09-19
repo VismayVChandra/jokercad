@@ -46,6 +46,8 @@ const redoEditBtn = document.getElementById("redoEditBtn");
 const measureBtn = document.getElementById("measureBtn");
 const exportBtn = document.getElementById("exportBtn");
 const exportMenu = document.getElementById("exportMenu");
+const moreBtn = document.getElementById("moreBtn");
+const moreMenu = document.getElementById("moreMenu");
 const shareBtn = document.getElementById("shareBtn");
 const arBtn = document.getElementById("arBtn");
 const sectionBar = document.getElementById("sectionBar");
@@ -1896,6 +1898,44 @@ function setExportMenu(open) {
 }
 
 exportBtn.addEventListener("click", () => setExportMenu(exportMenu.hidden));
+
+/* ---------------- the More menu ---------------- */
+
+// The tools in here are the same buttons they always were, so nothing about
+// how they work changes; this only opens and closes the thing they sit in.
+function setMoreMenu(open) {
+  moreMenu.hidden = !open;
+  moreBtn.setAttribute("aria-expanded", String(open));
+  moreBtn.classList.toggle("active", open);
+  if (!open) return;
+  if (!exportMenu.hidden) setExportMenu(false);
+  const r = moreBtn.getBoundingClientRect();
+  const width = moreMenu.offsetWidth;
+  moreMenu.style.top = `${r.bottom + 8}px`;
+  moreMenu.style.left = `${Math.max(12, Math.min(r.right - width, window.innerWidth - width - 12))}px`;
+}
+
+moreBtn.addEventListener("click", () => setMoreMenu(moreMenu.hidden));
+
+// Picking a tool closes the menu, so the part isn't left behind a panel.
+moreMenu.addEventListener("click", (e) => {
+  const tool = e.target.closest(".tool-btn");
+  if (tool && !tool.disabled) setMoreMenu(false);
+});
+
+document.addEventListener("pointerdown", (e) => {
+  if (!moreMenu.hidden && !moreMenu.contains(e.target) && !moreBtn.contains(e.target)) setMoreMenu(false);
+});
+
+window.addEventListener("resize", () => setMoreMenu(false));
+
+// Section, Measure, Compare and Wireframe stay on after the menu closes, and
+// the only sign of that would otherwise be hidden inside it. Watching the
+// buttons' own classes keeps the dot right without every mode having to
+// remember to update it.
+new MutationObserver(() => {
+  moreBtn.classList.toggle("has-active", Boolean(moreMenu.querySelector(".tool-btn.active")));
+}).observe(moreMenu, { subtree: true, attributes: true, attributeFilter: ["class"] });
 
 document.addEventListener("pointerdown", (e) => {
   if (!exportMenu.hidden && !exportMenu.contains(e.target) && !exportBtn.contains(e.target)) setExportMenu(false);
@@ -5009,6 +5049,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     // Closes the most recently opened thing first.
     if (!arModal.hidden) closeArModal();
+    else if (!moreMenu.hidden) setMoreMenu(false);
     else if (!planModal.hidden) closePlanModal();
     else if (!drawingModal.hidden) drawingModal.hidden = true;
     else if (!editPopup.hidden) closeEditPopup();
@@ -5026,7 +5067,10 @@ document.addEventListener("keydown", (e) => {
     else if (assembly.selected) selectInstance(null);
     return;
   }
-  const typing = e.target.matches("textarea, input:not([type=range])");
+  // Guarded: a keydown can arrive with a target that isn't an element (the
+  // document itself), and an unguarded .matches() there throws, taking every
+  // shortcut down with it.
+  const typing = e.target instanceof Element && e.target.matches("textarea, input:not([type=range])");
   if (typing || !lockScreen.hidden) return;
   const key = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && key === "z") {

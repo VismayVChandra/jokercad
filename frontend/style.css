@@ -1026,6 +1026,76 @@ button {
   padding-right: 7px;
 }
 
+/* ---------- the More menu ---------- */
+
+/* These are the same .tool-btn elements as before, so they keep their
+   handlers, their disabled rules and their active state — they just lay out
+   as rows here instead of as a row of icons. */
+.tool-menu {
+  min-width: 232px;
+  padding: 6px;
+}
+
+.tool-menu .tool-btn {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+
+/* The toolbar hides labels on a narrow window; in the menu they always show. */
+.tool-menu .tool-btn > span {
+  display: inline !important;
+  flex: 1;
+  text-align: left;
+}
+
+.tool-menu .tool-btn > svg {
+  flex-shrink: 0;
+}
+
+.tool-menu .tool-btn kbd {
+  flex-shrink: 0;
+  min-width: 17px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-faint);
+  font-family: inherit;
+  font-size: 10px;
+  text-align: center;
+}
+
+.tool-menu .tool-btn:disabled kbd {
+  opacity: 0.4;
+}
+
+.tool-menu .menu-label:not(:first-child) {
+  margin-top: 4px;
+}
+
+/* A tool left switched on inside the menu still needs to be visible when the
+   menu is shut, so the button carries a dot. */
+#moreBtn.has-active::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+#moreBtn {
+  position: relative;
+}
+
 /* ---------- design intent and geometry ---------- */
 
 .insight-card {
