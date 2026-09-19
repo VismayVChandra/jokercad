@@ -6,7 +6,7 @@ split, including replies in the older code-only shape that conversations saved
 before the spec existed still produce.
 """
 
-from app.cad.executor import extract_code, extract_spec
+from app.cad.executor import _clean_stderr, extract_code, extract_spec
 
 TWO_BLOCK_REPLY = """```json
 {"part": "plate", "units": "mm", "dimensions": {"length": 100},
@@ -80,3 +80,58 @@ def test_oversized_spec_is_trimmed():
 def test_long_spec_strings_are_capped():
     spec = extract_spec('```json\n{"note": "' + "x" * 5000 + '"}\n```')
     assert len(spec["note"]) <= 400
+
+
+# --- stderr cleaning -------------------------------------------------------
+
+CHESS_STDERR = '''/tmp/jokercad-2n6ucl3_/run.py:142: DeprecationWarning: add() is deprecated; use insert() instead.
+  add(body)
+/tmp/jokercad-2n6ucl3_/run.py:196: DeprecationWarning: add() is deprecated; use insert() instead.
+  add(body)
+/tmp/jokercad-2n6ucl3_/run.py:613: DeprecationWarning: add() is deprecated; use insert() instead.
+  add(pedestal)
+/tmp/jokercad-2n6ucl3_/run.py:614: DeprecationWarning: add() is deprecated; use insert() instead.
+  add(head.part)
+Traceback (most recent call last):
+  File "/tmp/jokercad-2n6ucl3_/run.py", line 778, in <module>
+    raise RuntimeError("`result` is not a valid/manifold solid (self-intersecting or malformed geometry).")
+RuntimeError: `result` is not a valid/manifold solid (self-intersecting or malformed geometry).
+'''
+
+
+def test_the_real_error_comes_first_not_the_warnings():
+    cleaned = _clean_stderr(CHESS_STDERR)
+    assert cleaned.startswith("RuntimeError: `result` is not a valid/manifold solid")
+    assert "DeprecationWarning" not in cleaned
+    assert "add(body)" not in cleaned
+    # The traceback survives: it says which line failed.
+    assert "line 778" in cleaned
+
+
+def test_a_multi_line_exception_message_survives_whole():
+    stderr = (
+        "Traceback (most recent call last):\n"
+        '  File "/tmp/run.py", line 10, in <module>\n'
+        "    build()\n"
+        "RuntimeError: `result` is a Sketch, not a solid\n"
+        "(you assigned a builder object instead of bp.part).\n"
+    )
+    cleaned = _clean_stderr(stderr)
+    assert cleaned.startswith("RuntimeError: `result` is a Sketch, not a solid\n(you assigned")
+
+
+def test_the_summary_survives_even_when_the_traceback_is_enormous():
+    stderr = "x\n" * 40_000 + "ValueError: the one thing that matters\n"
+    cleaned = _clean_stderr(stderr, limit=500)
+    assert cleaned.startswith("ValueError: the one thing that matters")
+    assert len(cleaned) <= 500
+
+
+def test_output_with_no_recognisable_exception_is_passed_through():
+    cleaned = _clean_stderr("something went sideways\nno traceback here\n")
+    assert "something went sideways" in cleaned
+
+
+def test_warnings_only_output_is_kept_rather_than_blanked():
+    stderr = "/tmp/run.py:1: DeprecationWarning: old\n  add(body)\n"
+    assert _clean_stderr(stderr).strip() != ""

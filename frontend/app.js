@@ -636,6 +636,27 @@ function setEntrySuccess(el, text) {
   scrollChatToEnd();
 }
 
+// The server leads a build failure with the exception itself and puts the
+// traceback after a blank line, so the first half is the bit worth reading.
+function splitError(error) {
+  const gap = String(error || "").indexOf("\n\n");
+  if (gap === -1) return { headline: String(error || ""), detail: "" };
+  return { headline: error.slice(0, gap), detail: error.slice(gap + 2) };
+}
+
+// Keeps a traceback from taking over the chat: it's still there, just folded.
+function addErrorDetail(el, detail) {
+  if (!detail) return;
+  const wrap = document.createElement("details");
+  wrap.className = "entry-detail";
+  const summary = document.createElement("summary");
+  summary.textContent = "Where it failed";
+  const body = document.createElement("p");
+  body.textContent = detail;
+  wrap.append(summary, body);
+  el.append(wrap);
+}
+
 function setEntryError(el, text) {
   stopElapsed();
   el.className = "entry entry-status is-error";
@@ -1128,7 +1149,11 @@ async function rebuildWithParam(param, field) {
     }
     commitVersion(pending, label, data, false);
   } else {
-    if (data) setEntryError(pending, `Couldn't rebuild with ${label}: ${data.error}`);
+    if (data) {
+      const { headline, detail } = splitError(data.error);
+      setEntryError(pending, `Couldn't rebuild with ${label}. ${headline}`);
+      addErrorDetail(pending, detail);
+    }
     field.value = String(param.value);
   }
   setBusy(false);
@@ -2009,7 +2034,9 @@ async function buildSharedPart(code) {
     conversation.push({ role: "user", content: "Start from this part." }, { role: "assistant", content: fence(data.code) });
     commitVersion(pending, "Opened the shared part", data, true);
   } else if (data) {
-    setEntryError(pending, `Couldn't build the shared part: ${data.error}`);
+    const { headline, detail } = splitError(data.error);
+    setEntryError(pending, `Couldn't build the shared part. ${headline}`);
+    addErrorDetail(pending, detail);
   }
   setBusy(false);
   return ok;
@@ -5129,8 +5156,10 @@ async function buildEditedCode() {
   } else if (data) {
     // The error belongs next to the code as well as in the chat: the drawer is
     // where it gets fixed, and it covers the chat while it's open.
-    setEntryError(pending, `That code didn't build: ${data.error}`);
-    recordLog({ kind: "error", text: data.error });
+    const { headline, detail } = splitError(data.error);
+    setEntryError(pending, `That code didn't build. ${headline}`);
+    addErrorDetail(pending, detail);
+    recordLog({ kind: "error", text: headline });
     codeError.textContent = data.error;
     codeError.hidden = false;
     setCodeDrawer(true);

@@ -135,6 +135,18 @@ export_step(result, r"{step_path}")
 # us the others.
 _LIMITS_CODE = """\
 try:
+    import warnings as _warnings
+    # build123d's own deprecations (add() -> insert(), and friends) fire once
+    # per call site, so a script that builds 32 chess pieces buries its real
+    # traceback under hundreds of identical lines. They aren't actionable:
+    # the code came from a model or was pasted in, and nothing downstream can
+    # act on them. Everything else still comes through.
+    _warnings.filterwarnings("ignore", category=DeprecationWarning)
+    _warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+    del _warnings
+except ImportError:
+    pass
+try:
     import resource as _rlimit
     for _name, _value in (
         ("RLIMIT_CPU", {cpu_seconds}),
@@ -398,6 +410,55 @@ def _child_env() -> dict[str, str]:
     return env
 
 
+# A failed build's stderr is read by three audiences: the person looking at the
+# chat, the repair loop, and the reviewer. All three want the same line — the
+# exception the build actually died on — and none of them want the warnings a
+# long script emits on the way there. Leading with the exception also matters
+# for cost: Groq's free tier allows 8,000 tokens a minute, and a truncated tail
+# of warnings would spend them saying nothing.
+_WARNING_RE = re.compile(r"^\s*\S+:\d+: \w*Warning: ")
+_EXCEPTION_RE = re.compile(r"^(?:\w+\.)*\w*(?:Error|Exception|Exit|Interrupt|Failure)\b")
+
+
+def _clean_stderr(text: str, limit: int = 4000) -> str:
+    """Drops warning noise, then puts the real exception first."""
+    kept: list[str] = []
+    drop_echo = False
+    for line in text.splitlines():
+        if _WARNING_RE.match(line):
+            # Python prints the offending source line under each warning.
+            drop_echo = True
+            continue
+        if drop_echo:
+            drop_echo = False
+            if line.startswith(" ") and not line.lstrip().startswith('File "'):
+                continue
+        kept.append(line)
+
+    cleaned = "\n".join(kept).strip()
+    if not cleaned:
+        # Nothing but warnings: better to show them than to show nothing.
+        return text.strip()[-limit:]
+
+    # The exception block runs from the last unindented Error/Exception line to
+    # the end, so a message spanning several lines survives intact.
+    lines = cleaned.splitlines()
+    start = next(
+        (i for i in range(len(lines) - 1, -1, -1) if _EXCEPTION_RE.match(lines[i])),
+        None,
+    )
+    if start is None:
+        return cleaned[-limit:]
+
+    summary = "\n".join(lines[start:]).strip()
+    if summary == cleaned:
+        return summary[:limit]
+    # The traceback stays, trimmed from the front, because it says which line
+    # failed. The summary is never trimmed: it is the part that has to survive.
+    room = max(limit - len(summary) - 2, 0)
+    return f"{summary}\n\n{cleaned[-room:]}" if room else summary[:limit]
+
+
 def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
     """Runs model-written code; with step=True, also exports the part as STEP.
 
@@ -454,12 +515,12 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
             return ExecutionResult(
                 ok=False,
                 code=code,
-                error=f"The CAD engine (build123d/OpenCascade) failed to load on this server: {proc.stderr.strip()}",
+                error=f"The CAD engine (build123d/OpenCascade) failed to load on this server: {_clean_stderr(proc.stderr)}",
                 retryable=False,
             )
 
         if proc.returncode != 0:
-            return ExecutionResult(ok=False, code=code, error=proc.stderr.strip()[-4000:])
+            return ExecutionResult(ok=False, code=code, error=_clean_stderr(proc.stderr))
 
         if not glb_path.exists():
             return ExecutionResult(ok=False, code=code, error="Script ran but did not produce a GLB file.")
