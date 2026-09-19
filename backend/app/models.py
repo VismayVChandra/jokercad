@@ -20,6 +20,9 @@ class GenerateRequest(BaseModel):
     # A provider name to try first (e.g. "groq"), chosen by the user instead of
     # the router's own order. Still falls back to the others if it fails.
     provider: str | None = Field(default=None, max_length=16)
+    # The intent behind the part as it stands, sent back on a follow-up so an
+    # edit is made against known state instead of being re-derived from the chat.
+    spec: dict | None = None
 
 
 class RunRequest(BaseModel):

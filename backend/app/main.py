@@ -1,5 +1,6 @@
 import base64
 import binascii
+import json
 import logging
 import os
 import re
@@ -89,6 +90,28 @@ def _fit_note(fit: str | None) -> str:
     return (
         f"\n\n(Fit setting: {description}. Where parts go together, like a pin or shaft in a hole, make the "
         f'hole {size} than what goes in it: fit_clearance("{kind}", "{process}"), kept in a `clearance` parameter.)'
+    )
+
+
+def _intent_note(spec: dict | None) -> str:
+    """Tells the model what the part already is, so a follow-up edits it.
+
+    Without this, "make it 120 mm long" is answered from the conversation alone
+    and the model can quietly re-derive dimensions it had already settled. With
+    the spec in front of it, the edit is a change to known state, and the spec
+    it returns can be diffed against the last one.
+    """
+    if not spec:
+        return ""
+    try:
+        declared = json.dumps(spec, separators=(",", ":"))[:2000]
+    except (TypeError, ValueError):
+        return ""
+    return (
+        "\n\n(The part as it stands was built to this intent:\n"
+        f"{declared}\n"
+        "Change only what this request asks for. Keep every other dimension, feature and assumption "
+        "exactly as it is, and return the full updated intent block reflecting the part after the change.)"
     )
 
 
@@ -395,7 +418,7 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     request_text = prompt or "Build the object in the picture."
     history = _prepare_history([m.model_dump() for m in req.history][-MAX_HISTORY_MESSAGES:], request_text)
     asked = f"{PICTURE_NOTE}\n\n{request_text}" if image else request_text
-    base_messages = history + [{"role": "user", "content": asked + _fit_note(req.fit)}]
+    base_messages = history + [{"role": "user", "content": asked + _fit_note(req.fit) + _intent_note(req.spec)}]
     messages = base_messages
     images = [image] if image else None
     required_features = [(has, message) for wants, has, message, _ in _FEATURE_CHECKS if wants(request_text)]

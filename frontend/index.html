@@ -61,6 +61,13 @@
       <button type="button" class="tool-btn view-btn model-tool" data-view="right" title="Right view (4)" disabled>Right</button>
     </div>
     <div class="tool-divider"></div>
+    <button type="button" id="undoEditBtn" class="tool-btn icon-only model-tool" title="Undo (Ctrl+Z)" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>
+    </button>
+    <button type="button" id="redoEditBtn" class="tool-btn icon-only model-tool" title="Redo (Ctrl+Shift+Z)" disabled>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg>
+    </button>
+    <div class="tool-divider"></div>
     <button type="button" id="sectionBtn" class="tool-btn model-tool" title="Section view: cut the part open (S)" disabled>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M3.5 12h17"/><path d="m7 17 2-2"/><path d="m11 17 2-2"/><path d="m15 17 2-2"/></svg>
       <span>Section</span>

@@ -41,6 +41,8 @@ const wireframeBtn = document.getElementById("wireframeBtn");
 const sectionBtn = document.getElementById("sectionBtn");
 const organicBtn = document.getElementById("organicBtn");
 const motionBtn = document.getElementById("motionBtn");
+const undoEditBtn = document.getElementById("undoEditBtn");
+const redoEditBtn = document.getElementById("redoEditBtn");
 const measureBtn = document.getElementById("measureBtn");
 const exportBtn = document.getElementById("exportBtn");
 const exportMenu = document.getElementById("exportMenu");
@@ -508,6 +510,7 @@ function clearViewer() {
   paramsCard.hidden = true;
   partsCard.hidden = true;
   renderInsight(null);
+  updateUndoButtons();
   codeView.textContent = "";
 }
 
@@ -682,8 +685,61 @@ function decorateVersionEntry(entryEl, index) {
   });
 }
 
-function showVersion(index, reframe) {
+/* ---------------- undo and redo across versions ---------------- */
+
+// Versions are only ever appended, so undo never destroys anything: it moves
+// the part's "you are here" pointer back through the versions this session
+// visited, and redo moves it forward again. Each part keeps its own trail, so
+// switching parts doesn't tangle two histories together.
+const NO_TRAIL = { back: [], forward: [] };
+
+function trail(part) {
+  // No part yet (the viewer is cleared, or projects are still loading): hand
+  // back an empty trail rather than reaching into null.
+  if (!part) return NO_TRAIL;
+  if (!part.trail) part.trail = { back: [], forward: [] };
+  return part.trail;
+}
+
+function updateUndoButtons() {
+  const { back, forward } = trail(activePart);
+  undoEditBtn.disabled = assembly.on || !back.length;
+  redoEditBtn.disabled = assembly.on || !forward.length;
+  undoEditBtn.title = back.length ? `Undo to v${back[back.length - 1] + 1} (Ctrl+Z)` : "Nothing to undo (Ctrl+Z)";
+  redoEditBtn.title = forward.length
+    ? `Redo to v${forward[forward.length - 1] + 1} (Ctrl+Shift+Z)`
+    : "Nothing to redo (Ctrl+Shift+Z)";
+}
+
+function undoEdit() {
+  const { back, forward } = trail(activePart);
+  if (busy || assembly.on || !back.length) return;
+  forward.push(activeVersion);
+  showVersion(back.pop(), false, { track: false });
+  showToast(`Back to v${activeVersion + 1}`);
+}
+
+function redoEdit() {
+  const { back, forward } = trail(activePart);
+  if (busy || assembly.on || !forward.length) return;
+  back.push(activeVersion);
+  showVersion(forward.pop(), false, { track: false });
+  showToast(`Forward to v${activeVersion + 1}`);
+}
+
+undoEditBtn.addEventListener("click", undoEdit);
+redoEditBtn.addEventListener("click", redoEdit);
+
+// track: false when the move is itself an undo/redo, so stepping back and
+// forward doesn't keep adding to the trail it is walking.
+function showVersion(index, reframe, { track = true } = {}) {
   setCompareMode(false);
+  if (track && activeVersion >= 0 && activeVersion !== index) {
+    const { back, forward } = trail(activePart);
+    back.push(activeVersion);
+    // A new branch from here makes anything undone unreachable, as in any editor.
+    forward.length = 0;
+  }
   activeVersion = index;
   activePart.activeVersion = index;
   scheduleSave();
@@ -696,6 +752,7 @@ function showVersion(index, reframe) {
   updateMotionBtn();
   renderParams(version.code);
   renderInsight(version);
+  updateUndoButtons();
   loadModel(version.glbBytes, reframe, version.parts, version.motion);
   if (narrowScreen.matches) setPanelCollapsed(true);
 }
@@ -1236,12 +1293,16 @@ async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
   setBusy(true, "Building part…");
   const pending = addThinkingEntry("Generating…");
 
+  // The current part's intent rides along, so a follow-up ("make it 120 mm
+  // long") is applied to known state rather than re-derived from the chat.
+  const intent = versions[activeVersion] ? versions[activeVersion].spec : null;
   const payload = {
     prompt,
     history: conversation,
     fit: fitSelect.value,
     ...(picture ? { image: picture.base64 } : {}),
     ...(preferredProvider ? { provider: preferredProvider } : {}),
+    ...(intent ? { spec: intent } : {}),
   };
   const { data, unauthorized } = await callApi("/api/generate", payload, pending);
   refreshUsage();
@@ -3250,7 +3311,8 @@ function selectPart(part) {
   renderPartLog(part);
   if (versions.length) {
     const saved = part.activeVersion;
-    showVersion(saved >= 0 && saved < versions.length ? saved : versions.length - 1, true);
+    // Switching parts isn't an edit, so it doesn't add to this part's trail.
+    showVersion(saved >= 0 && saved < versions.length ? saved : versions.length - 1, true, { track: false });
   } else {
     clearViewer();
   }
@@ -4786,9 +4848,13 @@ document.addEventListener("keydown", (e) => {
   const typing = e.target.matches("textarea, input:not([type=range])");
   if (typing || !lockScreen.hidden) return;
   const key = e.key.toLowerCase();
-  if (assembly.on && (e.ctrlKey || e.metaKey) && key === "z") {
+  if ((e.ctrlKey || e.metaKey) && key === "z") {
     e.preventDefault();
-    undoMove();
+    // In the Assembly tab this steps back through moves; on a part it steps
+    // back through the versions this session has visited.
+    if (assembly.on) undoMove();
+    else if (e.shiftKey) redoEdit();
+    else undoEdit();
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey || !currentModel) return;

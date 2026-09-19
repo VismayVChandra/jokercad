@@ -961,6 +961,12 @@ button {
   color: var(--text-dim);
 }
 
+/* Undo/redo carry no label at any width, so they stay square. */
+.tool-btn.icon-only {
+  padding-left: 7px;
+  padding-right: 7px;
+}
+
 /* ---------- design intent and geometry ---------- */
 
 .insight-card {

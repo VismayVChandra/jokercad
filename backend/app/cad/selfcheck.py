@@ -174,6 +174,17 @@ def _check_holes(spec: dict, measured: dict, report: Report) -> None:
             continue
         kind = str(feature.get("type", "")).lower()
         if kind not in _HOLE_TYPES:
+            # A fillet or a slot is a real feature we have no measurement for.
+            # Say so, rather than letting it pass unmentioned: an unchecked
+            # feature shouldn't look the same as a checked one.
+            report.checks.append(
+                Check(
+                    f"Feature '{kind or 'unnamed'}'",
+                    SKIPPED,
+                    expected=", ".join(f"{k} {v}" for k, v in feature.items() if k != "type" and _number(v) is not None),
+                    detail="Declared, but there is no measurement that can confirm it.",
+                )
+            )
             continue
 
         diameter = _number(feature.get("diameter"))

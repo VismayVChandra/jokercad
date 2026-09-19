@@ -124,6 +124,16 @@ def test_repair_hint_names_only_what_failed():
     assert "start over" not in hint.lower()
 
 
+def test_unverifiable_feature_is_declared_not_ignored():
+    """A fillet can't be measured here, so it must show as skipped, not vanish."""
+    spec = {"features": [{"type": "fillet", "radius": 5}, {"type": "hole_pattern", "diameter": 6, "count": 4}]}
+    report = check_part(spec, plate_stats())
+    assert status_of(report, "fillet") == SKIPPED
+    assert report.ok  # skipped is not a failure
+    # and it isn't counted as a win either
+    assert report.as_dict()["skipped"] >= 1
+
+
 def test_no_spec_or_no_measurements_returns_none():
     """Older saved parts have no spec; the check must stand down, not fail them."""
     assert check_part(None, plate_stats()) is None
