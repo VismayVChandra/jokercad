@@ -168,6 +168,7 @@
     <div id="projectList"></div>
     <div class="menu-sep"></div>
     <button type="button" class="menu-action" data-action="plan">Build a whole project…</button>
+    <button type="button" class="menu-action" data-action="fromcode">Build from code…</button>
     <button type="button" class="menu-action" data-action="new">New project</button>
     <button type="button" class="menu-action" data-action="rename">Rename this project</button>
     <button type="button" class="menu-action" data-action="export">Export project file</button>
@@ -339,6 +340,10 @@
         <p class="empty-project-cta">
           Building more than one part?
           <button type="button" id="planProjectBtn" class="text-btn">Describe a whole project →</button>
+        </p>
+        <p class="empty-project-cta">
+          Got code from another AI?
+          <button type="button" id="codeStartCtaBtn" class="text-btn">Build from code →</button>
         </p>
       </div>
     </div>
@@ -523,6 +528,52 @@
         <div id="planProgress" class="plan-step" hidden>
           <p class="plan-lede">Building each part. This takes a minute or two — you can close this and watch the parts appear.</p>
           <ul id="planStatusList" class="plan-status-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Some AI tools write CAD code better than jokercad's own prompt path does,
+       but they don't know what this app needs back. The dialog hands over a
+       prompt that says so, so the code that comes back works first time. -->
+  <div id="codeStartModal" class="modal" hidden>
+    <div class="modal-card plan-modal-card">
+      <div class="modal-header">
+        <span class="params-title">Build from code</span>
+        <button type="button" id="codeStartCloseBtn" class="icon-btn" title="Close (Esc)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="plan-body code-start-body">
+        <p class="plan-lede">
+          ChatGPT, Claude and Gemini write good CAD code — they just don't know what jokercad
+          needs back. The prompt below tells them. What builds is a normal part: measure it,
+          check it for printing, export STEP, carry on editing it by prompt.
+        </p>
+
+        <div class="plan-step">
+          <div class="step-head"><span class="step-num">1</span>Describe your part</div>
+          <textarea id="codeStartWhat" class="plan-field" rows="2"
+            placeholder="a wall bracket for a 35 mm pipe, with two M4 screw holes"></textarea>
+          <p class="plan-examples">Plain English — or paste OpenSCAD or other CAD code here, and the prompt asks for a translation instead.</p>
+        </div>
+
+        <div class="plan-step">
+          <div class="step-head"><span class="step-num">2</span>Copy this into your AI tool</div>
+          <pre id="codeStartPrompt" class="prompt-preview"></pre>
+          <div class="plan-actions">
+            <button type="button" id="codeStartCopyBtn" class="primary-btn">Copy the prompt</button>
+          </div>
+        </div>
+
+        <div class="plan-step">
+          <div class="step-head"><span class="step-num">3</span>Paste what it gives you back</div>
+          <textarea id="codeStartCode" class="plan-field mono-field" rows="5" spellcheck="false"
+            placeholder="Paste the whole reply — the code is picked out of it."></textarea>
+          <p id="codeStartError" class="account-status is-error" hidden></p>
+          <div class="plan-actions">
+            <button type="button" id="codeStartBuildBtn" class="primary-btn" disabled>Build it</button>
+          </div>
         </div>
       </div>
     </div>

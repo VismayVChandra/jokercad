@@ -25,6 +25,14 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   a normal version, so undo, compare and export all work on it, and follow-up
   prompts carry on from it. Pasted code is validated and sandboxed exactly like
   model-written code; see [Security](#security).
+- **Build from code** (project menu): for bringing a part in from ChatGPT,
+  Claude or Gemini. Describe the part, copy the prompt it builds — which spells
+  out what this app needs back, the things an outside model can't guess: the
+  library, the `result` variable, millimetres, and the `name = number  # mm,
+  what it is` line shape the parameter fields are read from — then paste the
+  reply. The code is picked out of the fence, so the surrounding chat can come
+  with it. Pasting OpenSCAD or other CAD code into the description turns the
+  prompt into a translation request instead.
 - **Design intent**: before writing any code, the AI declares what it is about
   to build — sizes, features, constraints — split into what you actually asked
   for and what it assumed on your behalf. Assumptions are shown in amber, so a

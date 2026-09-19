@@ -41,6 +41,15 @@ const runCodeBtn = document.getElementById("runCodeBtn");
 const revertCodeBtn = document.getElementById("revertCodeBtn");
 const codeHint = document.getElementById("codeHint");
 const codeError = document.getElementById("codeError");
+const codeStartModal = document.getElementById("codeStartModal");
+const codeStartCloseBtn = document.getElementById("codeStartCloseBtn");
+const codeStartWhat = document.getElementById("codeStartWhat");
+const codeStartPrompt = document.getElementById("codeStartPrompt");
+const codeStartCopyBtn = document.getElementById("codeStartCopyBtn");
+const codeStartCode = document.getElementById("codeStartCode");
+const codeStartBuildBtn = document.getElementById("codeStartBuildBtn");
+const codeStartError = document.getElementById("codeStartError");
+const codeStartCtaBtn = document.getElementById("codeStartCtaBtn");
 const wireframeBtn = document.getElementById("wireframeBtn");
 const sectionBtn = document.getElementById("sectionBtn");
 const organicBtn = document.getElementById("organicBtn");
@@ -878,6 +887,7 @@ function setBusy(on, label = "") {
   paramsCard.classList.toggle("is-busy", on);
   paramsList.querySelectorAll("input").forEach((field) => (field.disabled = on));
   refreshCodeControls();
+  refreshCodeStartBuild();
   if (on) showViewerStatus(label, { loading: true });
   else if (partInfoText) showViewerStatus(idleStatusText());
   else viewerStatus.hidden = true;
@@ -3740,6 +3750,9 @@ const PROJECT_ACTIONS = {
   plan() {
     openPlanModal();
   },
+  fromcode() {
+    openCodeStartModal();
+  },
   new() {
     const name = window.prompt("Name the new project", "Untitled project");
     if (!name || !name.trim()) return;
@@ -5127,45 +5140,157 @@ runCodeBtn.addEventListener("click", () => buildEditedCode());
 // Builds whatever is in the panel. The server treats this exactly like
 // model-written code: same AST validation, same resource limits. Hand-edited
 // code is no more trusted than generated code, and needs to be no less.
-async function buildEditedCode() {
-  const code = codeView.value;
-  if (busy || !code.trim() || !codeIsEdited()) return;
-
+// Shared by the code panel and the Build from code dialog. It runs the code,
+// commits it as a version and reports in the chat; the error comes back to the
+// caller as well, so whichever surface the user is looking at can repeat it
+// where they are about to fix it.
+async function buildCodeAsVersion(code, label) {
   if (emptyState) emptyState.remove();
-  codeError.hidden = true;
-  const pending = addThinkingEntry("Building your edited code…");
-  recordLog({ kind: "user", text: "Build edited code" });
+  const pending = addThinkingEntry(`Building your ${label}…`);
+  recordLog({ kind: "user", text: `Build ${label}` });
   setBusy(true, "Building part…");
 
-  // No spec is sent. An edit can turn the part into something else entirely,
-  // so checking it against the intent the model declared for the *previous*
+  // No spec is sent. Supplied code can be a different part entirely, so
+  // checking it against the intent the model declared for the *previous*
   // version would report failures the user didn't cause. The geometry is still
   // measured; only the comparison is skipped.
   const { data } = await callApi("/api/run", { code }, pending);
+  let error = "";
   if (data && data.ok) {
     // Follow-up prompts have to build on what was actually built, not on the
-    // superseded version, so the edited code replaces the last thing the model
-    // said. With nothing to replace — a paste into an empty project — it
-    // becomes the starting point instead.
+    // superseded version, so this replaces the last thing the model said. With
+    // nothing to replace — code brought into an empty project — it becomes the
+    // starting point instead.
     if (conversation.length && conversation[conversation.length - 1].role === "assistant") {
       conversation[conversation.length - 1] = { role: "assistant", content: fence(data.code) };
     } else {
       conversation.push({ role: "user", content: "Start from this part." }, { role: "assistant", content: fence(data.code) });
     }
-    commitVersion(pending, "Built your edited code", data, !versions.length);
+    commitVersion(pending, `Built your ${label}`, data, !versions.length);
   } else if (data) {
-    // The error belongs next to the code as well as in the chat: the drawer is
-    // where it gets fixed, and it covers the chat while it's open.
-    const { headline, detail } = splitError(data.error);
+    error = data.error;
+    const { headline, detail } = splitError(error);
     setEntryError(pending, `That code didn't build. ${headline}`);
     addErrorDetail(pending, detail);
     recordLog({ kind: "error", text: headline });
-    codeError.textContent = data.error;
+  }
+  setBusy(false);
+  return { ok: Boolean(data && data.ok), error };
+}
+
+async function buildEditedCode() {
+  const code = codeView.value;
+  if (busy || !code.trim() || !codeIsEdited()) return;
+
+  codeError.hidden = true;
+  const { error } = await buildCodeAsVersion(code, "edited code");
+  if (error) {
+    // The error belongs next to the code as well as in the chat: the drawer is
+    // where it gets fixed, and it covers the chat while it's open.
+    codeError.textContent = error;
     codeError.hidden = false;
     setCodeDrawer(true);
   }
-  setBusy(false);
 }
+
+/* ---------------- build from code ---------------- */
+
+// The whole point of this dialog. An AI asked for "CAD code" writes something
+// plausible that this app then rejects, because it can't know the four things
+// that actually matter here: the library, the `result` variable, millimetres,
+// and the one-dimension-per-line shape the parameter fields are read from.
+// Saying so up front is the difference between code that builds first time and
+// a round of copy-paste debugging.
+const CODE_START_RULES = [
+  "Rules the code must follow:",
+  "- Use build123d only. Not OpenSCAD, not CadQuery, not a mesh library.",
+  "- Assign the finished solid to a variable called `result`, e.g. `result = bp.part`.",
+  "  It must be a Part, Solid or Compound — not a builder object and not a sketch.",
+  "- Every dimension is in millimetres.",
+  "- Put each dimension on its own line at the top of the file, written exactly as",
+  "  `name = number  # mm, what it is`, and use those names everywhere below instead",
+  "  of repeating numbers. They become editable fields in the app.",
+  "- Import nothing except `build123d` and `math`. No files, no network, no processes.",
+  "- The result must be a single valid, watertight solid with real volume: no",
+  "  self-intersections, no zero-thickness walls, no leftover construction solids.",
+  "- Reply with the code only, in one ```python block, with no explanation.",
+].join("\n");
+
+function codeStartPromptFor(what) {
+  const described = what.trim() || "[describe your part here]";
+  return `Write build123d (Python) code for this part:\n\n${described}\n\n${CODE_START_RULES}`;
+}
+
+function refreshCodeStartPrompt() {
+  codeStartPrompt.textContent = codeStartPromptFor(codeStartWhat.value);
+}
+
+// People paste the whole reply, chat and all. The code is whatever is in the
+// fence; without one, assume the paste is already just code.
+function stripCodeFence(text) {
+  const fenced = text.match(/```(?:[A-Za-z]*)\s*\n([\s\S]*?)```/);
+  return (fenced ? fenced[1] : text).trim();
+}
+
+function refreshCodeStartBuild() {
+  codeStartBuildBtn.disabled = busy || stripCodeFence(codeStartCode.value) === "";
+}
+
+function openCodeStartModal() {
+  if (busy) {
+    showToast("Wait for the current build to finish.");
+    return;
+  }
+  codeStartModal.hidden = false;
+  codeStartError.hidden = true;
+  refreshCodeStartPrompt();
+  refreshCodeStartBuild();
+  codeStartWhat.focus();
+}
+
+function closeCodeStartModal() {
+  codeStartModal.hidden = true;
+}
+
+codeStartCtaBtn?.addEventListener("click", openCodeStartModal);
+codeStartCloseBtn.addEventListener("click", closeCodeStartModal);
+codeStartModal.addEventListener("click", (e) => {
+  if (e.target === codeStartModal) closeCodeStartModal();
+});
+
+codeStartWhat.addEventListener("input", refreshCodeStartPrompt);
+codeStartCode.addEventListener("input", () => {
+  codeStartError.hidden = true;
+  refreshCodeStartBuild();
+});
+
+codeStartCopyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(codeStartPromptFor(codeStartWhat.value));
+    codeStartCopyBtn.textContent = "Copied";
+    setTimeout(() => (codeStartCopyBtn.textContent = "Copy the prompt"), 1600);
+  } catch {
+    showToast("Couldn't reach the clipboard — select the prompt and copy it.");
+  }
+});
+
+codeStartBuildBtn.addEventListener("click", async () => {
+  const code = stripCodeFence(codeStartCode.value);
+  if (busy || !code) return;
+  // The dialog closes on success so the part it built is the first thing seen,
+  // and stays open on failure with the paste still in it, ready to be replaced.
+  const { ok, error } = await buildCodeAsVersion(code, "pasted code");
+  if (ok) {
+    closeCodeStartModal();
+    codeStartWhat.value = "";
+    codeStartCode.value = "";
+    refreshCodeStartPrompt();
+    refreshCodeStartBuild();
+  } else if (error) {
+    codeStartError.textContent = splitError(error).headline;
+    codeStartError.hidden = false;
+  }
+});
 
 const VIEW_KEYS = { 1: "iso", 2: "top", 3: "front", 4: "right" };
 
@@ -5174,6 +5299,7 @@ document.addEventListener("keydown", (e) => {
     // Closes the most recently opened thing first.
     if (!arModal.hidden) closeArModal();
     else if (!moreMenu.hidden) setMoreMenu(false);
+    else if (!codeStartModal.hidden) closeCodeStartModal();
     else if (!planModal.hidden) closePlanModal();
     else if (!drawingModal.hidden) drawingModal.hidden = true;
     else if (!editPopup.hidden) closeEditPopup();
