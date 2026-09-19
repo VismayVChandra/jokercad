@@ -19,7 +19,21 @@ Without Gemini, a text-only check of the code and measurements runs instead.
 
 - **Edit dimensions by hand**: every size the code exposes shows up as a
   parameter; changing one rebuilds the part without an AI call.
-- **Version history**: click any earlier ✓ to go back to it.
+- **Design intent**: before writing any code, the AI declares what it is about
+  to build — sizes, features, constraints — split into what you actually asked
+  for and what it assumed on your behalf. Assumptions are shown in amber, so a
+  default clearance or inset is never mistaken for your request.
+- **Checked against the real solid**: after it builds, the finished geometry is
+  measured (hole count and diameters, overall extents, symmetry, validity) and
+  compared with that intent. A mismatch is fed back as a specific diagnostic and
+  repaired before you see it; anything that can't be measured is marked "not
+  checked" rather than counted as a pass (`backend/app/cad/selfcheck.py`).
+- **Geometry inspector**: exact values from the kernel — volume, surface area,
+  bounding box, face/edge/vertex counts, validity, and every hole and boss with
+  its diameter, depth and position. None of it is derived from the on-screen mesh.
+- **Version history**: click any earlier ✓ to go back to it, or step through
+  with undo/redo (`Ctrl+Z`, `Ctrl+Shift+Z`). Versions are only ever added, so
+  nothing is discarded.
 - **Compare versions** (`C`): overlays any two versions in the viewer (blue,
   orange, translucent) so a changed feature is easy to spot, next to a
   line-by-line diff of the code and a size/volume readout, with **Restore A**
@@ -76,8 +90,11 @@ Without Gemini, a text-only check of the code and measurements runs instead.
   it out by hand each time.
 - **Section view** (`S`): cut the part open along X, Y or Z to see bores and
   wall thicknesses.
-- **Measure** (`M`): click two points for the distance and its X/Y/Z
-  components; clicks near a corner snap to it.
+- **Measure** (`M`): click a hole or boss for its exact diameter and depth,
+  read from the geometry rather than the mesh, with the point snapped to the
+  true axis so two clicks give a real centre-to-centre span. Elsewhere, click
+  two points for the distance and its X/Y/Z components; clicks near a corner
+  snap to it.
 - **Export**: STEP (exact geometry for Fusion, SolidWorks, FreeCAD), STL for
   printing, GLB, or a transparent PNG of the view.
 - **Share**: copies a link that carries the part's code, so no database is
@@ -232,6 +249,19 @@ on two devices at once.
 
 4. Open http://localhost:8000.
 
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest                  # everything
+python -m pytest -m "not cad"     # skip the ones that build real geometry
+```
+
+The suite covers the execution boundary (every escape that the old filter let
+through), the geometric self-check, and reply parsing. The `cad`-marked tests
+run the real CAD engine and take about a minute in total, plus a one-off wait
+on Windows the first time while antivirus scans the OpenCascade libraries.
+
 The first generation on a fresh Windows machine can take a minute or more
 while antivirus scans OpenCascade's native libraries; later ones take seconds.
 If Windows **Smart App Control** is on, it may block those unsigned libraries
@@ -272,11 +302,28 @@ variables as for Vercel.
 
 ## Security
 
-Generated code runs in a subprocess on the server. API keys and other
-secret-looking variables are removed from its environment, and a basic filter
-blocks obvious dangerous calls — but both are easy to get around, so treat
-anyone who can generate as someone who can run code on the server and use your
-LLM quota.
+Model-written code is treated as untrusted input, because it is: a prompt can
+steer what the model writes, and `/api/run` takes code straight from the
+browser. Three layers sit around it (`backend/app/cad/validator.py`):
+
+- **What may run.** The code is parsed and its syntax tree walked before it is
+  executed. Imports are allowlisted (`build123d`, `math`, the bundled parts
+  helpers), dunder attributes are refused — which is what every classic escape
+  reaches for — and so are the builtins that turn data into code or touch the
+  filesystem. A refusal is phrased so the repair loop can act on it.
+- **How much it may use.** The child limits its own CPU time, output file size
+  and process count before the CAD engine loads, and results are size-checked
+  before being read into memory. `CAD_MEMORY_LIMIT_MB` adds an address-space
+  cap; it is off by default because OpenCascade reserves virtual memory it
+  never commits.
+- **What it can see.** API keys and other secret-looking variables are stripped
+  from the child's environment, and it runs in a throwaway directory.
+
+This is defence in depth, **not a sandbox**. Escaping a Python allowlist is a
+known art, so still treat anyone who can generate as someone who might run code
+on your server and spend your LLM quota. Real isolation needs a different
+execution substrate (a locked-down container per run, gVisor, or WebAssembly);
+see `ROADMAP.md`.
 
 - Set `APP_PASSWORD` on any publicly reachable deployment. Generation then
   requires the password; the page itself stays viewable. Use a long random
