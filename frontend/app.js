@@ -582,17 +582,48 @@ function fillUserEntry(el, text, image) {
   el.append(span);
 }
 
-function addThinkingEntry(text) {
+// Counts up on whatever entry is currently pending. A build can take anywhere
+// from a few seconds to a couple of minutes depending on the provider and how
+// many repair attempts it needs, and a timer that is plainly still moving says
+// "working" far better than three dots that look the same at 5s and at 90s.
+let elapsedTimer = null;
+
+function stopElapsed() {
+  clearInterval(elapsedTimer);
+  elapsedTimer = null;
+}
+
+// note: what actually happens while they wait. Said once, plainly, instead of
+// pretending to know which step the server is on — it doesn't report that.
+function addThinkingEntry(text, note = "") {
   const el = document.createElement("div");
   el.className = "entry entry-status";
   el.innerHTML = '<span class="thinking-dots"><span></span><span></span><span></span></span><span></span>';
-  el.lastElementChild.textContent = text;
+  const label = el.lastElementChild;
+  label.textContent = text;
+
+  if (note) {
+    const hint = document.createElement("span");
+    hint.className = "entry-note";
+    hint.textContent = note;
+    el.append(hint);
+  }
+
+  stopElapsed();
+  const started = Date.now();
+  elapsedTimer = setInterval(() => {
+    const seconds = Math.round((Date.now() - started) / 1000);
+    // Only once it's long enough to be worth watching.
+    if (seconds >= 3) label.textContent = `${text} ${seconds}s`;
+  }, 1000);
+
   chatLog.appendChild(el);
   scrollChatToEnd();
   return el;
 }
 
 function setEntrySuccess(el, text) {
+  stopElapsed();
   el.className = "entry entry-status is-success";
   el.innerHTML = `${ICON_CHECK}<span></span>`;
   el.querySelector("span").textContent = text;
@@ -600,10 +631,55 @@ function setEntrySuccess(el, text) {
 }
 
 function setEntryError(el, text) {
+  stopElapsed();
   el.className = "entry entry-status is-error";
   el.innerHTML = `${ICON_ALERT}<span></span>`;
   el.querySelector("span").textContent = text;
   // a collapsed bottom sheet would hide the error
+  setPanelCollapsed(false);
+  scrollChatToEnd();
+}
+
+// A generation that gave up. The raw error is written for the model — it's the
+// repair instruction that didn't work — so it goes behind a disclosure, and the
+// user gets a plain reason, something to try, and a way to retry in one click.
+function setGenerateFailure(el, error, retry) {
+  stopElapsed();
+  el.className = "entry entry-status is-error";
+  el.innerHTML = `${ICON_ALERT}<span></span>`;
+  el.querySelector("span").textContent = "Couldn't build that one.";
+
+  const hint = document.createElement("span");
+  hint.className = "entry-note";
+  hint.textContent =
+    "The AI hit the same problem three times running. Giving it exact sizes, or asking for a simpler version first and adding detail afterwards, usually gets past it.";
+  el.append(hint);
+
+  if (error) {
+    const detail = document.createElement("details");
+    detail.className = "entry-detail";
+    const summary = document.createElement("summary");
+    summary.textContent = "What it got stuck on";
+    const body = document.createElement("p");
+    body.textContent = error;
+    detail.append(summary, body);
+    el.append(detail);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "entry-actions";
+  const again = document.createElement("button");
+  again.type = "button";
+  again.className = "text-btn";
+  again.textContent = "Try again";
+  again.addEventListener("click", () => {
+    if (busy) return;
+    el.remove();
+    retry();
+  });
+  actions.append(again);
+  el.append(actions);
+
   setPanelCollapsed(false);
   scrollChatToEnd();
 }
@@ -1292,7 +1368,7 @@ async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
   recordLog({ kind: "user", text: shownAs, ...(picture ? { image: picture.thumb } : {}) });
   sendBtn.classList.add("is-loading");
   setBusy(true, "Building part…");
-  const pending = addThinkingEntry("Generating…");
+  const pending = addThinkingEntry("Generating…", "The AI writes the code, the server builds the solid, then it's measured and checked against your request.");
 
   // The current part's intent rides along, so a follow-up ("make it 120 mm
   // long") is applied to known state rather than re-derived from the chat.
@@ -1336,7 +1412,7 @@ async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
       recordLog({ kind: "warning", text: `Self-check: ${data.note}` });
     }
   } else if (data) {
-    setEntryError(pending, data.error);
+    setGenerateFailure(pending, data.error, () => runPrompt(prompt, shownAs, { picture }));
     recordLog({ kind: "error", text: data.error });
     if (data.code) codeView.textContent = data.code;
   }
@@ -2197,7 +2273,7 @@ planBuildBtn.addEventListener("click", async () => {
     addUserEntry(planned.prompt);
     recordLog({ kind: "user", text: planned.prompt });
     setBusy(true, `Building ${planned.name}…`);
-    const pending = addThinkingEntry("Generating…");
+    const pending = addThinkingEntry("Generating…", "The AI writes the code, the server builds the solid, then it's measured and checked against your request.");
     const genPayload = {
       prompt: planned.prompt,
       history: [],
