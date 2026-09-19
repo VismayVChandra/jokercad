@@ -642,12 +642,63 @@ button {
   color: #c8cee0;
   white-space: pre;
   tab-size: 4;
+  /* It's a textarea now, so it has to be stripped back to look like the panel
+     it replaced: no chrome, no resize grip, no rounded browser default. */
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  resize: none;
+  outline: none;
 }
 
-#codeView:empty::before {
-  content: "No code generated yet.";
+#codeView::placeholder {
   color: var(--text-faint);
   font-family: "Inter", sans-serif;
+}
+
+#codeView:focus {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.drawer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.drawer-hint {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* The shared disabled style is cursor: progress, which is right for the send
+   button but wrong here: this one is disabled because there is nothing new to
+   build, not because something is under way. */
+#runCodeBtn:disabled {
+  cursor: default;
+}
+
+.drawer-hint.is-dirty {
+  color: var(--accent);
+}
+
+.drawer-error {
+  margin: 0;
+  padding: 10px 14px;
+  max-height: 150px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: rgba(220, 80, 80, 0.08);
+  color: #f2b3b3;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 /* ---------- camera views ---------- */

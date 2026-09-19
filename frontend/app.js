@@ -37,6 +37,10 @@ const codeDrawer = document.getElementById("codeDrawer");
 const codeToggleBtn = document.getElementById("codeToggleBtn");
 const closeCodeBtn = document.getElementById("closeCodeBtn");
 const copyCodeBtn = document.getElementById("copyCodeBtn");
+const runCodeBtn = document.getElementById("runCodeBtn");
+const revertCodeBtn = document.getElementById("revertCodeBtn");
+const codeHint = document.getElementById("codeHint");
+const codeError = document.getElementById("codeError");
 const wireframeBtn = document.getElementById("wireframeBtn");
 const sectionBtn = document.getElementById("sectionBtn");
 const organicBtn = document.getElementById("organicBtn");
@@ -514,7 +518,7 @@ function clearViewer() {
   partsCard.hidden = true;
   renderInsight(null);
   updateUndoButtons();
-  codeView.textContent = "";
+  setCodeView("");
 }
 
 function loadModel(glbBytes, reframe, parts, motionSpec) {
@@ -825,7 +829,7 @@ function showVersion(index, reframe, { track = true } = {}) {
   versions.forEach((v, i) => v.entryEl?.classList.toggle("is-active", i === index));
   const version = versions[index];
   currentCode = version.code;
-  codeView.textContent = version.code;
+  setCodeView(version.code);
   modelTools.forEach((btn) => (btn.disabled = false));
   compareBtn.disabled = versions.length < 2; // nothing to compare with just one version
   updateMotionBtn();
@@ -852,6 +856,7 @@ function setBusy(on, label = "") {
   partTabs.classList.toggle("is-busy", on);
   paramsCard.classList.toggle("is-busy", on);
   paramsList.querySelectorAll("input").forEach((field) => (field.disabled = on));
+  refreshCodeControls();
   if (on) showViewerStatus(label, { loading: true });
   else if (partInfoText) showViewerStatus(idleStatusText());
   else viewerStatus.hidden = true;
@@ -1416,7 +1421,7 @@ async function runPrompt(prompt, shownAs = prompt, { picture = null } = {}) {
   } else if (data) {
     setGenerateFailure(pending, data.error, () => runPrompt(prompt, shownAs, { picture }));
     recordLog({ kind: "error", text: data.error });
-    if (data.code) codeView.textContent = data.code;
+    if (data.code) setCodeView(data.code);
   }
 
   sendBtn.classList.remove("is-loading");
@@ -2032,7 +2037,7 @@ async function offerSharedPart() {
 
   if (assembly.on) selectPart(activePart);
   if (emptyState) emptyState.remove();
-  codeView.textContent = code;
+  setCodeView(code);
   const card = document.createElement("div");
   card.className = "entry entry-share";
   card.innerHTML = wantsAr
@@ -5037,11 +5042,101 @@ codeToggleBtn.addEventListener("click", () => setCodeDrawer(!codeDrawer.classLis
 closeCodeBtn.addEventListener("click", () => setCodeDrawer(false));
 
 copyCodeBtn.addEventListener("click", async () => {
-  if (!codeView.textContent) return;
-  await navigator.clipboard.writeText(codeView.textContent);
+  if (!codeView.value) return;
+  await navigator.clipboard.writeText(codeView.value);
   copyCodeBtn.textContent = "Copied";
   setTimeout(() => (copyCodeBtn.textContent = "Copy"), 1400);
 });
+
+/* ---------------- editing the code by hand ---------------- */
+
+// The panel is a textarea, so code can be edited or pasted in from elsewhere
+// and built directly. `codeBaseline` is whatever the panel was last filled
+// with by the app; anything different from it is an unbuilt edit. Every write
+// to the panel goes through setCodeView so the two never drift apart — a
+// textarea that the user has typed into ignores later .textContent writes, and
+// the panel would have gone stale without this.
+let codeBaseline = "";
+
+function setCodeView(code) {
+  codeBaseline = code;
+  codeView.value = code;
+  codeError.hidden = true;
+  refreshCodeControls();
+}
+
+function codeIsEdited() {
+  return codeView.value !== codeBaseline;
+}
+
+function refreshCodeControls() {
+  const edited = codeIsEdited();
+  const runnable = edited && codeView.value.trim() !== "" && !busy;
+  runCodeBtn.disabled = !runnable;
+  revertCodeBtn.hidden = !edited || codeBaseline === "";
+  codeHint.classList.toggle("is-dirty", edited);
+  codeHint.textContent = edited ? "Edited — not built yet." : "Editable — Ctrl+Enter builds.";
+}
+
+codeView.addEventListener("input", () => {
+  codeError.hidden = true;
+  refreshCodeControls();
+});
+
+codeView.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    if (!runCodeBtn.disabled) buildEditedCode();
+  }
+});
+
+revertCodeBtn.addEventListener("click", () => {
+  setCodeView(codeBaseline);
+  codeView.focus();
+});
+
+runCodeBtn.addEventListener("click", () => buildEditedCode());
+
+// Builds whatever is in the panel. The server treats this exactly like
+// model-written code: same AST validation, same resource limits. Hand-edited
+// code is no more trusted than generated code, and needs to be no less.
+async function buildEditedCode() {
+  const code = codeView.value;
+  if (busy || !code.trim() || !codeIsEdited()) return;
+
+  if (emptyState) emptyState.remove();
+  codeError.hidden = true;
+  const pending = addThinkingEntry("Building your edited code…");
+  recordLog({ kind: "user", text: "Build edited code" });
+  setBusy(true, "Building part…");
+
+  // No spec is sent. An edit can turn the part into something else entirely,
+  // so checking it against the intent the model declared for the *previous*
+  // version would report failures the user didn't cause. The geometry is still
+  // measured; only the comparison is skipped.
+  const { data } = await callApi("/api/run", { code }, pending);
+  if (data && data.ok) {
+    // Follow-up prompts have to build on what was actually built, not on the
+    // superseded version, so the edited code replaces the last thing the model
+    // said. With nothing to replace — a paste into an empty project — it
+    // becomes the starting point instead.
+    if (conversation.length && conversation[conversation.length - 1].role === "assistant") {
+      conversation[conversation.length - 1] = { role: "assistant", content: fence(data.code) };
+    } else {
+      conversation.push({ role: "user", content: "Start from this part." }, { role: "assistant", content: fence(data.code) });
+    }
+    commitVersion(pending, "Built your edited code", data, !versions.length);
+  } else if (data) {
+    // The error belongs next to the code as well as in the chat: the drawer is
+    // where it gets fixed, and it covers the chat while it's open.
+    setEntryError(pending, `That code didn't build: ${data.error}`);
+    recordLog({ kind: "error", text: data.error });
+    codeError.textContent = data.error;
+    codeError.hidden = false;
+    setCodeDrawer(true);
+  }
+  setBusy(false);
+}
 
 const VIEW_KEYS = { 1: "iso", 2: "top", 3: "front", 4: "right" };
 

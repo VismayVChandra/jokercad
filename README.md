@@ -19,6 +19,12 @@ Without Gemini, a text-only check of the code and measurements runs instead.
 
 - **Edit dimensions by hand**: every size the code exposes shows up as a
   parameter; changing one rebuilds the part without an AI call.
+- **Write or paste the code yourself**: the code panel (More → Code) is
+  editable. Change a line and press `Ctrl+Enter`, or paste build123d Python
+  written somewhere else — by hand, or by another AI — and build it. It becomes
+  a normal version, so undo, compare and export all work on it, and follow-up
+  prompts carry on from it. Pasted code is validated and sandboxed exactly like
+  model-written code; see [Security](#security).
 - **Design intent**: before writing any code, the AI declares what it is about
   to build — sizes, features, constraints — split into what you actually asked
   for and what it assumed on your behalf. Assumptions are shown in amber, so a
@@ -304,7 +310,10 @@ variables as for Vercel.
 
 Model-written code is treated as untrusted input, because it is: a prompt can
 steer what the model writes, and `/api/run` takes code straight from the
-browser. Three layers sit around it (`backend/app/cad/validator.py`):
+browser — including code you typed or pasted into the code panel yourself.
+Hand-written code goes through exactly the same checks; nothing about arriving
+from the editor makes it more trusted. Three layers sit around it
+(`backend/app/cad/validator.py`):
 
 - **What may run.** The code is parsed and its syntax tree walked before it is
   executed. Imports are allowlisted (`build123d`, `math`, the bundled parts

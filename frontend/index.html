@@ -157,9 +157,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.2"/><path d="M11 18h2"/></svg>
       <span>View in AR</span>
     </button>
-    <button type="button" id="codeToggleBtn" class="tool-btn" title="View generated code">
+    <button type="button" id="codeToggleBtn" class="tool-btn" title="View, edit or paste the code">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18-6-6 6-6"/><path d="m15 6 6 6-6 6"/></svg>
-      <span>Generated code</span>
+      <span>Code</span>
     </button>
   </div>
 
@@ -450,7 +450,7 @@
 
   <div id="codeDrawer">
     <div class="drawer-header">
-      <span>Generated code</span>
+      <span>Code</span>
       <div class="drawer-actions">
         <button type="button" id="copyCodeBtn" class="text-btn">Copy</button>
         <button type="button" id="closeCodeBtn" class="icon-btn" title="Close">
@@ -458,7 +458,16 @@
         </button>
       </div>
     </div>
-    <pre id="codeView"></pre>
+    <textarea id="codeView" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off"
+      placeholder="No code yet. Paste build123d Python here and build it."></textarea>
+    <p id="codeError" class="drawer-error" hidden></p>
+    <div class="drawer-footer">
+      <span id="codeHint" class="drawer-hint">Editable — Ctrl+Enter builds.</span>
+      <div class="drawer-actions">
+        <button type="button" id="revertCodeBtn" class="text-btn" hidden>Revert</button>
+        <button type="button" id="runCodeBtn" class="primary-btn" disabled title="Build this code (Ctrl+Enter)">Build this code</button>
+      </div>
+    </div>
   </div>
 
   <div id="drawingModal" class="modal" hidden>
