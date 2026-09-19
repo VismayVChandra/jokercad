@@ -961,6 +961,170 @@ button {
   color: var(--text-dim);
 }
 
+/* ---------- design intent and geometry ---------- */
+
+.insight-card {
+  padding: 0;
+}
+
+.insight-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.insight-summary::-webkit-details-marker {
+  display: none;
+}
+
+.insight-summary .params-title {
+  flex: 1;
+}
+
+.insight-chevron {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  transition: transform 0.18s var(--ease);
+}
+
+.insight-card[open] .insight-chevron {
+  transform: rotate(180deg);
+}
+
+.insight-verdict {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.insight-verdict.is-pass {
+  color: var(--success);
+}
+
+.insight-verdict.is-fail {
+  color: var(--error);
+}
+
+.insight-body {
+  padding: 0 14px 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.insight-check {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 8px;
+  padding: 5px 0;
+  font-size: 12px;
+}
+
+.insight-check .check-mark {
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.insight-check.is-pass .check-mark {
+  color: var(--success);
+}
+
+.insight-check.is-fail .check-mark {
+  color: var(--error);
+}
+
+.insight-check .check-detail {
+  grid-column: 2;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.insight-check.is-fail .check-detail {
+  color: var(--error);
+}
+
+.insight-list {
+  margin-top: 12px;
+}
+
+.insight-list-title {
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.insight-list ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.insight-list li {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+/* The AI's own guesses are marked out, so they are never mistaken for a request.
+   Same amber the chat uses for a self-check warning. */
+.insight-list.is-assumptions li {
+  color: #fcd98a;
+}
+
+.geometry-values {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.geometry-values dt {
+  color: var(--text-dim);
+}
+
+.geometry-values dd {
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  text-align: right;
+}
+
+.geometry-features {
+  margin-top: 12px;
+}
+
+.geometry-feature {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.geometry-feature .feature-kind {
+  min-width: 34px;
+  color: var(--text-faint);
+}
+
+.geometry-feature .feature-size {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--text);
+}
+
+.geometry-feature .feature-at {
+  color: var(--text-faint);
+}
+
 /* ---------- whole-project planning ---------- */
 
 .empty-project-cta {

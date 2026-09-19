@@ -209,7 +209,15 @@ def _jokercad_measure(result):
     caller: a measurement that fails must never cost the user their part.
     """
     faces = result.faces()
+    box = result.bounding_box()
     measured = {
+        # Exact values from the kernel. The viewer's own status line is derived
+        # from the triangle mesh instead, so it can differ slightly; these are
+        # the ones to trust.
+        "volume": result.volume,
+        "size": [box.max.X - box.min.X, box.max.Y - box.min.Y, box.max.Z - box.min.Z],
+        "min": [box.min.X, box.min.Y, box.min.Z],
+        "max": [box.max.X, box.max.Y, box.max.Z],
         "area": result.area,
         "faces": len(faces),
         "edges": len(result.edges()),

@@ -254,6 +254,33 @@
       <div id="paramsList"></div>
       <p class="params-hint">Change a value and press Enter — the part rebuilds from the same code.</p>
     </section>
+    <details id="intentCard" class="side-card insight-card" hidden>
+      <summary class="insight-summary">
+        <span class="params-title">Design intent</span>
+        <span id="intentVerdict" class="insight-verdict"></span>
+        <svg class="insight-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </summary>
+      <div class="insight-body">
+        <div id="intentChecks" class="insight-checks"></div>
+        <div id="intentLists"></div>
+        <div class="asm-actions">
+          <button type="button" id="intentCodeBtn" class="text-btn" title="The build123d code this part was built from">View the code</button>
+        </div>
+        <p class="params-hint">Checks compare the finished solid with what the AI said it would build. Anything it couldn't measure is marked "not checked" rather than counted as a pass.</p>
+      </div>
+    </details>
+    <details id="geometryCard" class="side-card insight-card" hidden>
+      <summary class="insight-summary">
+        <span class="params-title">Geometry</span>
+        <span id="geometryVerdict" class="insight-verdict"></span>
+        <svg class="insight-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </summary>
+      <div class="insight-body">
+        <dl id="geometryValues" class="geometry-values"></dl>
+        <div id="geometryFeatures" class="geometry-features"></div>
+        <p class="params-hint">Measured from the solid itself, not from the on-screen mesh.</p>
+      </div>
+    </details>
   </div>
 
   <aside id="panel">

@@ -60,6 +60,15 @@ const modelTools = [...document.querySelectorAll(".model-tool")];
 const viewerStatus = document.getElementById("viewerStatus");
 const paramsCard = document.getElementById("paramsCard");
 const paramsList = document.getElementById("paramsList");
+const intentCard = document.getElementById("intentCard");
+const intentVerdict = document.getElementById("intentVerdict");
+const intentChecks = document.getElementById("intentChecks");
+const intentLists = document.getElementById("intentLists");
+const intentCodeBtn = document.getElementById("intentCodeBtn");
+const geometryCard = document.getElementById("geometryCard");
+const geometryVerdict = document.getElementById("geometryVerdict");
+const geometryValues = document.getElementById("geometryValues");
+const geometryFeatures = document.getElementById("geometryFeatures");
 const partsCard = document.getElementById("partsCard");
 const partsList = document.getElementById("partsList");
 const lockScreen = document.getElementById("lockScreen");
@@ -498,6 +507,7 @@ function clearViewer() {
   modelTools.forEach((btn) => (btn.disabled = true));
   paramsCard.hidden = true;
   partsCard.hidden = true;
+  renderInsight(null);
   codeView.textContent = "";
 }
 
@@ -614,8 +624,20 @@ let busy = false;
 
 const fence = (code) => "```python\n" + code + "\n```";
 
-function addVersion(entryEl, code, glbBytes, reframe, parts, motionSpec) {
-  versions.push({ code, glbBytes, parts, motion: motionSpec, conversation: conversation.slice() });
+function addVersion(entryEl, code, glbBytes, reframe, parts, motionSpec, insight = {}) {
+  versions.push({
+    code,
+    glbBytes,
+    parts,
+    motion: motionSpec,
+    // What the model said it would build, what measuring the solid found, and
+    // how the two compared. All optional: versions saved before these existed
+    // simply carry null, and every reader has to cope with that.
+    spec: insight.spec || null,
+    check: insight.check || null,
+    measured: insight.measured || null,
+    conversation: conversation.slice(),
+  });
   const index = versions.length - 1;
   decorateVersionEntry(entryEl, index);
   showVersion(index, reframe);
@@ -625,7 +647,11 @@ function addVersion(entryEl, code, glbBytes, reframe, parts, motionSpec) {
 // Records a successful build, shown on its chat entry, as a new version of the active part.
 function commitVersion(entryEl, text, data, reframe) {
   setEntrySuccess(entryEl, text);
-  const index = addVersion(entryEl, data.code, base64ToBytes(data.glb_base64), reframe, data.parts, data.motion);
+  const index = addVersion(entryEl, data.code, base64ToBytes(data.glb_base64), reframe, data.parts, data.motion, {
+    spec: data.spec,
+    check: data.check,
+    measured: data.measured,
+  });
   recordLog({ kind: "version", text, version: index });
 }
 
@@ -669,6 +695,7 @@ function showVersion(index, reframe) {
   compareBtn.disabled = versions.length < 2; // nothing to compare with just one version
   updateMotionBtn();
   renderParams(version.code);
+  renderInsight(version);
   loadModel(version.glbBytes, reframe, version.parts, version.motion);
   if (narrowScreen.matches) setPanelCollapsed(true);
 }
@@ -693,6 +720,176 @@ function setBusy(on, label = "") {
   else if (partInfoText) showViewerStatus(idleStatusText());
   else viewerStatus.hidden = true;
 }
+
+/* ---------------- design intent and geometry ---------------- */
+
+// Both panels show values that came back from the server: the spec the model
+// declared, and measurements taken off the built solid. Everything is written
+// with textContent, never innerHTML — the spec is model-written text and is
+// treated as untrusted, like any other.
+
+const CHECK_MARKS = { pass: "✓", fail: "✕", skipped: "–" };
+
+function addRow(parent, className, ...cells) {
+  const row = document.createElement("div");
+  row.className = className;
+  for (const cell of cells) {
+    if (cell === null || cell === undefined) continue;
+    const el = document.createElement("span");
+    el.className = cell.className;
+    el.textContent = cell.text;
+    row.append(el);
+  }
+  parent.append(row);
+  return row;
+}
+
+function renderIntentCard(version) {
+  const spec = version && version.spec;
+  const check = version && version.check;
+  if (!spec && !check) {
+    intentCard.hidden = true;
+    return;
+  }
+
+  intentChecks.replaceChildren();
+  intentLists.replaceChildren();
+
+  if (check) {
+    const failed = (check.checks || []).filter((c) => c.status === "fail").length;
+    const confidence = check.confidence === null || check.confidence === undefined ? null : Math.round(check.confidence * 100);
+    intentVerdict.textContent = failed
+      ? `${failed} check${failed === 1 ? "" : "s"} failed`
+      : `${check.checked}/${check.checked} checked${confidence === null ? "" : ` · ${confidence}%`}`;
+    intentVerdict.className = `insight-verdict ${failed ? "is-fail" : "is-pass"}`;
+
+    for (const item of check.checks || []) {
+      const row = addRow(
+        intentChecks,
+        `insight-check is-${item.status}`,
+        { className: "check-mark", text: CHECK_MARKS[item.status] || "?" },
+        { className: "check-name", text: item.name }
+      );
+      const detail = [item.expected && `wanted ${item.expected}`, item.actual && `built ${item.actual}`]
+        .filter(Boolean)
+        .join(" · ");
+      const note = detail || item.detail;
+      if (note) {
+        const el = document.createElement("span");
+        el.className = "check-detail";
+        el.textContent = note;
+        row.append(el);
+      }
+    }
+    if (check.skipped) {
+      const el = document.createElement("p");
+      el.className = "params-hint";
+      el.textContent =
+        check.skipped === 1
+          ? "1 thing couldn't be measured, and wasn't counted either way."
+          : `${check.skipped} things couldn't be measured, and weren't counted either way.`;
+      intentChecks.append(el);
+    }
+  } else {
+    intentVerdict.textContent = "not checked";
+    intentVerdict.className = "insight-verdict";
+  }
+
+  // What the user actually asked for, kept apart from what the AI decided for them.
+  for (const [key, title] of [["explicit", "You asked for"], ["assumptions", "The AI assumed"]]) {
+    const items = spec && Array.isArray(spec[key]) ? spec[key].filter((v) => typeof v === "string") : [];
+    if (!items.length) continue;
+    const section = document.createElement("div");
+    section.className = `insight-list is-${key}`;
+    const heading = document.createElement("div");
+    heading.className = "insight-list-title";
+    heading.textContent = title;
+    section.append(heading);
+    const list = document.createElement("ul");
+    for (const item of items) {
+      const li = document.createElement("li");
+      li.textContent = item;
+      list.append(li);
+    }
+    section.append(list);
+    intentLists.append(section);
+  }
+
+  intentCard.hidden = false;
+}
+
+const MM3_PER_CM3 = 1000;
+
+function renderGeometryCard(version) {
+  const measured = version && version.measured;
+  if (!measured) {
+    geometryCard.hidden = true;
+    return;
+  }
+
+  const healthy = measured.valid && !measured.degenerate_faces;
+  geometryVerdict.textContent = healthy ? "valid solid" : "check geometry";
+  geometryVerdict.className = `insight-verdict ${healthy ? "is-pass" : "is-fail"}`;
+
+  const size = measured.size || [];
+  const rows = [
+    ["Bounding box", size.length === 3 ? `${size.map((v) => v.toFixed(2)).join(" × ")} mm` : null],
+    ["Volume", measured.volume ? `${(measured.volume / MM3_PER_CM3).toFixed(3)} cm³` : null],
+    ["Surface area", measured.area ? `${(measured.area / 100).toFixed(2)} cm²` : null],
+    ["Faces", measured.faces],
+    ["Edges", measured.edges],
+    ["Vertices", measured.vertices],
+    ["Shells", measured.shells],
+    ["Valid solid", measured.valid === undefined ? null : measured.valid ? "yes" : "no"],
+    ["Zero-area faces", measured.degenerate_faces === undefined ? null : measured.degenerate_faces],
+  ];
+
+  geometryValues.replaceChildren();
+  for (const [label, value] of rows) {
+    if (value === null || value === undefined) continue;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = String(value);
+    geometryValues.append(dt, dd);
+  }
+
+  geometryFeatures.replaceChildren();
+  const features = Array.isArray(measured.holes) ? measured.holes : [];
+  if (features.length) {
+    const heading = document.createElement("div");
+    heading.className = "insight-list-title";
+    heading.textContent = "Round features";
+    geometryFeatures.append(heading);
+    for (const feature of features.slice(0, 12)) {
+      const at = (feature.at || []).map((v) => v.toFixed(1)).join(", ");
+      addRow(
+        geometryFeatures,
+        "geometry-feature",
+        { className: "feature-kind", text: feature.kind === "boss" ? "boss" : "hole" },
+        { className: "feature-size", text: `Ø${feature.diameter} × ${feature.height} mm` },
+        { className: "feature-at", text: at ? `at ${at}` : "" }
+      );
+    }
+    if (features.length > 12) {
+      const more = document.createElement("p");
+      more.className = "params-hint";
+      more.textContent = `…and ${features.length - 12} more.`;
+      geometryFeatures.append(more);
+    }
+  }
+
+  geometryCard.hidden = false;
+}
+
+function renderInsight(version) {
+  renderIntentCard(version);
+  renderGeometryCard(version);
+}
+
+// The other half of the same transparency surface: the checks and confidence
+// live here, the code they were run against is one click away.
+intentCodeBtn.addEventListener("click", () => setCodeDrawer(true));
 
 /* ---------------- parameters ---------------- */
 
@@ -774,8 +971,14 @@ async function rebuildWithParam(param, field) {
   const pending = addThinkingEntry(`Rebuilding: ${label}`);
   setBusy(true, "Rebuilding part…");
 
-  const { data } = await callApi("/api/run", { code: applyParam(currentCode, param, value) }, pending);
+  // The intent goes with the rebuild, so a tweaked value is measured against
+  // the same spec the part was built to. Nothing is repaired: the user asked
+  // for this number, so a mismatch is reported rather than corrected.
+  const intent = versions[activeVersion] ? versions[activeVersion].spec : null;
+  const payload = { code: applyParam(currentCode, param, value), ...(intent ? { spec: intent } : {}) };
+  const { data } = await callApi("/api/run", payload, pending);
   if (data && data.ok) {
+    if (intent && !data.spec) data.spec = intent;
     // Follow-up prompts should build on the tweaked design, so it replaces the
     // latest code in the conversation. A new object keeps older version
     // snapshots (which share the array's items) unchanged.
@@ -2951,11 +3154,14 @@ function serializeProject(p) {
       conversation: part.conversation,
       activeVersion: part.activeVersion,
       log: part.log,
-      versions: part.versions.map(({ code, glbBytes, parts, motion: motionSpec, conversation }) => ({
+      versions: part.versions.map(({ code, glbBytes, parts, motion: motionSpec, spec, check, measured, conversation }) => ({
         code,
         glbBytes,
         parts: parts || null,
         motion: motionSpec || null,
+        spec: spec || null,
+        check: check || null,
+        measured: measured || null,
         conversation,
       })),
     })),
