@@ -80,13 +80,33 @@ if not hasattr(result, "volume"):
         f"`result` is a {{type(result).__name__}}, not a solid Part/Solid/Compound "
         "(e.g. you assigned a Sketch or a builder object instead of `bp.part`)."
     )
+# A negative volume is not a small volume: it means the shape is inside-out or
+# passes through itself, which is a different fix from an empty one, so the two
+# are reported separately rather than both as "~zero volume".
+if result.volume < -1e-6:
+    raise RuntimeError(
+        f"`result` has negative volume ({{result.volume:.2f}}mm^3), which means the solid "
+        "crosses through itself or is inside-out. The usual cause is a sweep or loft whose "
+        "profile is wider than the curve it follows, so the shape passes through itself: "
+        "make the profile smaller, or the path's radius larger."
+    )
 if result.volume <= 1e-6:
     raise RuntimeError(
         f"`result` has ~zero volume ({{result.volume}}mm^3) — the solid is empty, "
         "fully subtracted away, or the boolean operations cancelled it out."
     )
+{validity_code}
 if hasattr(result, "is_valid") and not result.is_valid:
-    raise RuntimeError("`result` is not a valid/manifold solid (self-intersecting or malformed geometry).")
+    try:
+        _bad = _jokercad_bad_geometry(result)
+    except Exception:
+        _bad = ""
+    raise RuntimeError(
+        "`result` is not a valid/manifold solid: "
+        + (_bad if _bad else "self-intersecting or malformed geometry")
+        + ". Two surfaces most likely cross each other there. Fix the geometry at those "
+        "coordinates and leave the rest of the part as it is."
+    )
 
 # Measurements for the review step; never allowed to break the build.
 {stats_code}
@@ -167,6 +187,42 @@ try:
 except ImportError:
     pass
 """
+
+# Runs in the child, next to the CAD engine. "Not a valid solid" on its own
+# leaves nobody — the person reading the chat, or the repair loop — any idea
+# where to look, and these parts can be hundreds of lines. OpenCascade already
+# knows which faces and edges fail; this just asks it and writes down where
+# they are. Never allowed to break the build: a diagnostic that throws would
+# replace a bad error message with a worse one.
+_VALIDITY_CODE = '''\
+def _jokercad_bad_geometry(result):
+    from OCP.BRepCheck import BRepCheck_Analyzer
+
+    analyzer = BRepCheck_Analyzer(result.wrapped)
+    notes = []
+    for label, items in (("face", result.faces()), ("edge", result.edges())):
+        bad = []
+        for item in items:
+            try:
+                if not analyzer.IsValid(item.wrapped):
+                    bad.append(item)
+            except Exception:
+                continue
+        if not bad:
+            continue
+        where = []
+        for item in bad[:3]:
+            try:
+                point = item.center()
+                where.append("(%.1f, %.1f, %.1f)" % (point.X, point.Y, point.Z))
+            except Exception:
+                continue
+        note = "%d of %d %ss are malformed" % (len(bad), len(items), label)
+        if where:
+            note += ", around " + ", ".join(where)
+        notes.append(note)
+    return "; ".join(notes)
+'''
 
 # Measures the built part for the review step: its overall size, and for an
 # assembly (or a part made of separate solids) each piece and any overlaps
@@ -488,6 +544,7 @@ def run_build123d_code(code: str, step: bool = False) -> ExecutionResult:
                 mesh_path=mesh_path,
                 engine_exit=_ENGINE_UNAVAILABLE_EXIT,
                 stats_code=_STATS_CODE,
+                validity_code=_VALIDITY_CODE,
                 step_export=_STEP_EXPORT.format(step_path=step_path) if step else "",
                 limits_code=_LIMITS_CODE.format(
                     cpu_seconds=CAD_CPU_SECONDS,

@@ -125,3 +125,48 @@ def test_unsafe_code_never_reaches_the_engine():
     result = run_build123d_code("import pathlib\nresult = Box(1, 1, 1)")
     assert not result.ok
     assert "not allowed" in result.error
+
+
+# --- what a broken solid is told about itself -----------------------------
+
+# A sweep whose profile is wider than the arc it follows: the shape passes
+# through itself. This is the shape of the failures people hit with pasted
+# code, where the script is far too long to find the bad part by reading it.
+SELF_INTERSECTING_SWEEP = """from build123d import *
+with BuildPart() as p:
+    with BuildLine() as path:
+        RadiusArc((0, 0, 0), (14, 14, 0), 10.0)
+    with BuildSketch(Plane.YZ):
+        Rectangle(30, 6)
+    sweep(path=path.line)
+result = p.part
+"""
+
+
+def test_a_self_intersecting_solid_is_not_reported_as_empty():
+    result = run_build123d_code(SELF_INTERSECTING_SWEEP)
+    assert not result.ok
+    # It has a large negative volume, which used to trip the "~zero volume,
+    # the solid is empty" branch and send the fix in entirely the wrong
+    # direction.
+    assert "negative volume" in result.error
+    assert "empty" not in result.error
+    assert "passes through itself" in result.error
+
+
+def test_a_malformed_solid_says_which_faces_and_where():
+    # Fusing the bad sweep into a big box keeps the malformed faces but makes
+    # the volume positive, so this reaches the validity check rather than the
+    # volume one.
+    result = run_build123d_code(SELF_INTERSECTING_SWEEP.replace("result = p.part", "result = p.part + Box(60, 60, 20)"))
+    assert not result.ok
+    assert "not a valid/manifold solid" in result.error
+    assert "faces are malformed" in result.error
+    # The coordinates are the point of it: the part is too long to find by eye.
+    assert "around (" in result.error
+
+
+def test_a_good_solid_still_builds():
+    # The new checks sit in front of every build, so the happy path is pinned.
+    result = run_build123d_code(plate(4))
+    assert result.ok, result.error
