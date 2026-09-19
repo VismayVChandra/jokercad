@@ -195,7 +195,8 @@ const PART_AXES = {
 };
 const section = { on: false, axis: "x", fraction: 0.5, flipped: false };
 const sectionPlane = new THREE.Plane();
-const ruler = { on: false, points: [] };
+// feature: the measured cylinder the latest click landed on, when it did.
+const ruler = { on: false, points: [], feature: null };
 
 /* ---------------- scene ---------------- */
 
@@ -1492,7 +1493,7 @@ const SNAP_PIXELS = 10;
 
 function idleStatusText() {
   if (picker.on) return "Click a face or a hole to change it";
-  if (ruler.on) return "Click two points on the part to measure";
+  if (ruler.on) return "Click a hole for its exact diameter, or two points to measure between them";
   if (assembly.mating) return assembly.mateFirst ? "Now click the face it should sit against" : "Click a flat face on the part to move";
   if (assembly.on) {
     const count = assembly.root ? assembly.root.children.length : 0;
@@ -1542,6 +1543,84 @@ function pickPoint(event) {
   return best;
 }
 
+/* Kernel-backed picking for the measure tool.
+
+   The mesh on screen is a triangulation, so a point picked off it is only as
+   exact as the tessellation. The server also sends the real cylinders it found
+   (centre, axis and diameter, straight from OpenCascade), so a click near one
+   is answered with that exact diameter and snapped to the true axis rather
+   than to the nearest triangle corner. */
+
+// Part coordinates (mm, Z up) to world, the same mapping the motion rig uses.
+function partToWorld() {
+  if (!currentModel) return null;
+  return currentModel.matrixWorld.clone().multiply(MODEL_TO_GLTF);
+}
+
+function measuredFeatures() {
+  const version = versions[activeVersion];
+  const features = version && version.measured && version.measured.holes;
+  return Array.isArray(features) ? features : [];
+}
+
+// The measured cylinder the click is aimed down, if any.
+//
+// This tests the ray rather than the surface point it hit, because the natural
+// gesture — clicking the middle of a hole — hits nothing at all: looking down a
+// through hole, the wall is edge-on and the middle is empty space. Aiming
+// anywhere across the hole's mouth counts as picking it.
+function featureAlongRay(event) {
+  const toWorld = partToWorld();
+  if (!toWorld) return null;
+
+  // A collapsed viewport (a hidden pane) leaves the camera unprojectable, and
+  // every comparison below would then be against NaN, which passes silently.
+  if (!window.innerWidth || !window.innerHeight) return null;
+  const pointer = new THREE.Vector2(
+    (event.clientX / window.innerWidth) * 2 - 1,
+    -(event.clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(pointer, camera);
+  const { origin: eye, direction: look } = raycaster.ray;
+  if (!Number.isFinite(eye.x) || !Number.isFinite(look.x)) return null;
+
+  // Measurements are in millimetres but the model is displayed scaled, so a
+  // radius has to be converted before comparing it with a world distance.
+  const perMm = new THREE.Vector3().setFromMatrixScale(toWorld).x;
+  if (!Number.isFinite(perMm) || perMm <= 0) return null;
+
+  let best = null;
+  for (const feature of measuredFeatures()) {
+    if (!Array.isArray(feature.at) || !Array.isArray(feature.axis) || !feature.diameter) continue;
+    const base = new THREE.Vector3(...feature.at).applyMatrix4(toWorld);
+    const axis = new THREE.Vector3(...feature.axis).transformDirection(toWorld).normalize();
+    if (!Number.isFinite(base.x) || !Number.isFinite(axis.x)) continue;
+
+    // Closest approach between the view ray and the feature's axis.
+    const between = base.clone().sub(eye);
+    const lookDotAxis = look.dot(axis);
+    const denominator = 1 - lookDotAxis * lookDotAxis;
+    // Looking straight down the axis: the ray meets it, so take the aim as dead on.
+    const alongRay =
+      denominator < 1e-6
+        ? between.dot(look)
+        : (between.dot(look) - lookDotAxis * between.dot(axis)) / denominator;
+    if (!Number.isFinite(alongRay) || alongRay <= 0) continue; // behind the camera, or unusable
+    const onRay = eye.clone().addScaledVector(look, alongRay);
+    const onAxis = base.clone().addScaledVector(axis, onRay.clone().sub(base).dot(axis));
+    const missBy = onRay.distanceTo(onAxis);
+    if (!Number.isFinite(missBy)) continue;
+
+    // Anywhere across the mouth of the feature, with a little room at the rim.
+    if (missBy > (feature.diameter / 2) * perMm * 1.15) continue;
+    // Snap to the axis's own reference point rather than to wherever along it
+    // this particular click happened to aim: two holes then measure exactly
+    // centre to centre, instead of picking up a difference in depth.
+    if (!best || alongRay < best.alongRay) best = { feature, alongRay, onAxis: base };
+  }
+  return best;
+}
+
 function drawRuler() {
   rulerGroup.children.forEach((child) => child.isLine && child.geometry.dispose());
   rulerGroup.clear();
@@ -1552,6 +1631,20 @@ function drawRuler() {
     dot.scale.setScalar(pointSize);
     dot.renderOrder = 10;
     rulerGroup.add(dot);
+  }
+
+  // One click on a cylinder already has something exact to say.
+  if (ruler.points.length === 1 && ruler.feature) {
+    const { feature } = ruler;
+    measureLabel.replaceChildren();
+    const size = document.createElement("strong");
+    size.textContent = `Ø${feature.diameter} mm`;
+    const detail = document.createElement("span");
+    detail.textContent = `${feature.kind} · ${feature.height} mm deep · measured, not from the mesh`;
+    measureLabel.append(size, detail);
+    measureLabel.hidden = false;
+    positionMeasureLabel();
+    return;
   }
 
   measureLabel.hidden = ruler.points.length < 2;
@@ -1567,13 +1660,17 @@ function drawRuler() {
 }
 
 function positionMeasureLabel() {
-  if (ruler.points.length < 2) return;
-  const mid = toScreen(ruler.points[0].clone().lerp(ruler.points[1], 0.5));
-  measureLabel.style.transform = `translate(${mid.x}px, ${mid.y}px) translate(-50%, calc(-100% - 12px))`;
+  if (!ruler.points.length) return;
+  // Over the midpoint of a span, or over the feature itself for a single pick.
+  const at =
+    ruler.points.length < 2 ? ruler.points[0] : ruler.points[0].clone().lerp(ruler.points[1], 0.5);
+  const point = toScreen(at);
+  measureLabel.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, calc(-100% - 12px))`;
 }
 
 function clearRuler() {
   ruler.points = [];
+  ruler.feature = null;
   drawRuler();
 }
 
@@ -1596,9 +1693,14 @@ renderer.domElement.addEventListener("pointerdown", (e) => (pointerDownAt = { x:
 renderer.domElement.addEventListener("pointerup", (e) => {
   if (!ruler.on || !pointerDownAt || e.button !== 0) return;
   if (Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5) return;
-  const point = pickPoint(e);
+  // A hole or boss is answered from the measured geometry, so its diameter is
+  // the kernel's and the point sits on the true axis — which makes a following
+  // click a real centre-to-centre span. Otherwise fall back to the mesh pick.
+  const found = featureAlongRay(e);
+  const point = found ? found.onAxis : pickPoint(e);
   if (!point) return;
   if (ruler.points.length === 2) ruler.points = [];
+  ruler.feature = found ? found.feature : null;
   ruler.points.push(point);
   drawRuler();
 });
