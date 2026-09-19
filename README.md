@@ -230,6 +230,20 @@ on two devices at once.
   — useful when Gemini's daily free quota runs out and you'd rather switch
   to Groq than wait. It still falls back to the others if the one you picked
   fails, and the choice is remembered in the browser.
+- **Fitting the request to the provider**: the free tiers differ by an order
+  of magnitude — Groq refuses a single request over 8,000 tokens, Gemini
+  reads a whole script — so how much of the conversation a request carries is
+  decided per provider (`GROQ_INPUT_BUDGET`, `GEMINI_INPUT_BUDGET`) at the
+  moment the router picks one, not once for everybody. A per-minute rate limit
+  is waited out (10s, then 20s); a daily limit or a too-large request isn't,
+  because waiting can't fix either — the router moves on instead.
+- **Repairing long parts**: a free-tier model can only write about 3,000
+  tokens, so a part of a few hundred lines can't be sent back rewritten — the
+  fix would arrive truncated mid-function. Above `PATCH_REPAIR_MIN_TOKENS` the
+  repair asks for search/replace edits instead, which are applied server-side
+  (`backend/app/cad/patch.py`). An edit that matches nowhere, or in two places,
+  is refused rather than guessed at — a misapplied edit gives you a part that
+  builds and is quietly wrong — and the retry asks for the whole script.
 - **Usage**: the number next to the AI picker (e.g. "23/60 this hour") is
   `GENERATIONS_PER_HOUR`'s shared counter — how much of the whole
   deployment's hourly cap is used, not a personal quota (jokercad has no

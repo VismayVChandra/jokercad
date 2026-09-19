@@ -11,6 +11,10 @@ class OllamaProvider(LLMProvider):
     def __init__(self):
         self.host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self.model = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+        # Local models are usually served with a modest context window, and
+        # overflowing it silently drops the start of the prompt rather than
+        # erroring, so this stays conservative.
+        self.input_budget = int(os.getenv("OLLAMA_INPUT_BUDGET", "6000"))
 
     def is_configured(self) -> bool:
         # Always "configured" — availability is checked live in generate().

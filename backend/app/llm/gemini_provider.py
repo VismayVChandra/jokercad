@@ -38,6 +38,10 @@ class GeminiProvider(LLMProvider):
         # the setting off, for models that don't support a thinking level.
         self.thinking_level = os.getenv("GEMINI_THINKING_LEVEL", "low")
         self.timeout = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "60"))
+        # Gemini's context runs to hundreds of thousands of tokens, so a whole
+        # generated script fits easily. Capped well below that anyway: the free
+        # tier limits requests per minute, and a huge prompt is slow to read.
+        self.input_budget = int(os.getenv("GEMINI_INPUT_BUDGET", "60000"))
 
     def is_configured(self) -> bool:
         return bool(self.api_key)

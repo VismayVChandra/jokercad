@@ -20,10 +20,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .cad.executor import ExecutionResult, extract_code, extract_spec, run_build123d_code
-from .cad.prompts import PLAN_SYSTEM_PROMPT, SYSTEM_PROMPT, build_repair_prompt, parse_plan
+from .cad.patch import PatchError, apply_patches
+from .cad.prompts import (
+    PLAN_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
+    build_patch_repair_prompt,
+    build_repair_prompt,
+    parse_plan,
+)
 from .cad.selfcheck import check_part
 from .cad.render import render_views
 from .cad.review import REVIEW_PROMPT, VISUAL_REVIEW_PROMPT, build_review_request, parse_verdict
+from .llm.base import approx_tokens
 from .llm.router import LLMRouter, RouterExhaustedError
 from .models import GenerateRequest, GenerateResponse, PlannedPart, PlanRequest, PlanResponse, RunRequest
 
@@ -58,10 +66,15 @@ MAX_REPAIR_ATTEMPTS = int(os.getenv("MAX_REPAIR_ATTEMPTS", "3"))
 # so a long iterative session doesn't blow past free-tier context limits.
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "16"))
 MAX_PROMPT_LENGTH = 2000
-# Rough cap (at ~4 characters per token) on what one LLM request sends. Groq's
-# free tier allows 8,000 tokens per minute including the reply, and rejects a
-# single request that would exceed it outright.
-INPUT_TOKEN_BUDGET = int(os.getenv("INPUT_TOKEN_BUDGET", "5000"))
+# How much of the conversation one request may carry is decided per provider,
+# in the router, because the free tiers differ by an order of magnitude: Groq
+# refuses a request over 8,000 tokens outright, Gemini reads a whole script.
+# Trimming here instead would cut every request to the smallest of them.
+# Above this much code, a repair asks for edits instead of the whole script
+# again: a free-tier model can only write ~3,000 tokens, so a longer rewrite
+# comes back truncated. Shorter parts keep the full-rewrite path, which is
+# simpler and has always worked.
+PATCH_REPAIR_MIN_TOKENS = int(os.getenv("PATCH_REPAIR_MIN_TOKENS", "1200"))
 # The end of a traceback is what explains the failure.
 MAX_ERROR_CHARS = 1500
 # base64 adds a third on top of this, and Vercel caps function responses at 4.5 MB.
@@ -186,8 +199,6 @@ def _fence(code: str) -> str:
     return "```python\n" + code + "\n```"
 
 
-def _approx_tokens(*texts: str) -> int:
-    return sum(len(t) for t in texts) // 4
 
 
 def _prepare_history(history: list[dict], prompt: str) -> list[dict]:
@@ -198,9 +209,8 @@ def _prepare_history(history: list[dict], prompt: str) -> list[dict]:
         m if m["role"] == "user" or i == latest else {"role": "assistant", "content": "(superseded earlier version)"}
         for i, m in enumerate(history)
     ]
-    # Drop the oldest exchanges until the request fits, always keeping the latest one.
-    while len(history) > 2 and _approx_tokens(SYSTEM_PROMPT, prompt, *(m["content"] for m in history)) > INPUT_TOKEN_BUDGET:
-        history = history[2:]
+    # Dropping older exchanges to fit is the router's job, once it knows which
+    # provider is about to take the request and how much it can read.
     return history
 
 
@@ -347,13 +357,24 @@ def _review_part(
         return None
 
 
-def _repair_messages(base_messages: list[dict], code: str, error: str) -> list[dict]:
-    # A retry carries only the latest failed attempt, so repair requests don't
-    # grow with every failure.
-    return base_messages + [
-        {"role": "assistant", "content": _fence(code)},
-        {"role": "user", "content": build_repair_prompt(error[-MAX_ERROR_CHARS:])},
-    ]
+def _repair_messages(base_messages: list[dict], code: str, error: str, patch: bool | None = None) -> tuple[list[dict], bool]:
+    """The repair request, and whether it asks for edits rather than a rewrite.
+
+    A retry carries only the latest failed attempt, so repair requests don't
+    grow with every failure. `patch=False` forces a rewrite, which is how a set
+    of edits that wouldn't apply is followed up.
+    """
+    if patch is None:
+        patch = approx_tokens(code) > PATCH_REPAIR_MIN_TOKENS
+    build = build_patch_repair_prompt if patch else build_repair_prompt
+    return (
+        base_messages
+        + [
+            {"role": "assistant", "content": _fence(code)},
+            {"role": "user", "content": build(error[-MAX_ERROR_CHARS:])},
+        ],
+        patch,
+    )
 
 
 def _model_response(
@@ -429,6 +450,10 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
     code = None
     spec = None
     last_error = None
+    # Set when the last request asked for edits rather than a whole script, with
+    # the code those edits apply to.
+    patch_mode = False
+    patch_base = None
     # The latest part that built but that the review objected to. It's returned,
     # with the objection as a note, if no later attempt does better.
     flagged: GenerateResponse | None = None
@@ -441,14 +466,34 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                 logger.warning("attempt=%d all providers failed: %s", attempt, e)
                 return flagged or GenerateResponse(ok=False, code=code, error=e.user_message(), attempts=attempt)
 
-            code = extract_code(text)
-            spec = extract_spec(text) or spec
+            if patch_mode:
+                try:
+                    code = apply_patches(patch_base, text)
+                except PatchError as e:
+                    # The edits didn't fit. Rather than guess where they were
+                    # meant to go, ask for the whole script; on a part this long
+                    # that lands on a provider with room to send it back.
+                    logger.info("provider=%s attempt=%d edits did not apply: %s", provider_used, attempt, e)
+                    code = patch_base
+                    messages, patch_mode = _repair_messages(
+                        base_messages,
+                        code,
+                        f"{last_error}\n\n(Your edits could not be applied: {e})",
+                        patch=False,
+                    )
+                    continue
+                # A patch reply carries no json block, so the intent the part was
+                # built to is the one it already had.
+            else:
+                code = extract_code(text)
+                spec = extract_spec(text) or spec
 
             missing = next((message for has, message in required_features if not has(code)), None)
             if missing:
                 last_error = missing
                 logger.info("provider=%s attempt=%d missing a requested feature: %s", provider_used, attempt, missing[:60])
-                messages = _repair_messages(base_messages, code, missing)
+                patch_base = code
+                messages, patch_mode = _repair_messages(base_messages, code, missing)
                 continue
 
             result = run_build123d_code(code)
@@ -473,7 +518,8 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                     response.note = _check_summary(report)
                     flagged = response
                     last_error = report.repair_hint()
-                    messages = _repair_messages(base_messages, code, last_error)
+                    patch_base = code
+                    messages, patch_mode = _repair_messages(base_messages, code, last_error)
                     continue
 
                 problem = _review_part(requests_so_far, result, review_notes, image) if response.ok else None
@@ -483,7 +529,8 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
                 response.note = problem
                 flagged = response
                 last_error = f"The part built, but a check against the request found a problem: {problem}"
-                messages = _repair_messages(base_messages, code, last_error)
+                patch_base = code
+                messages, patch_mode = _repair_messages(base_messages, code, last_error)
                 continue
 
             if not result.retryable:
@@ -494,7 +541,8 @@ def generate(req: GenerateRequest, request: Request) -> GenerateResponse:
 
             last_error = result.error
             logger.info("provider=%s attempt=%d failed: %s", provider_used, attempt, last_error[-300:])
-            messages = _repair_messages(base_messages, code, last_error)
+            patch_base = code
+            messages, patch_mode = _repair_messages(base_messages, code, last_error)
     except Exception as e:
         logger.exception("unexpected error")
         return flagged or GenerateResponse(

@@ -1,10 +1,13 @@
+import logging
 import os
 import re
 
-from .base import LLMProvider, ProviderError
+from .base import LLMProvider, ProviderError, fit_messages
 from .gemini_provider import GeminiProvider
 from .groq_provider import GroqProvider
 from .ollama_provider import OllamaProvider
+
+logger = logging.getLogger(__name__)
 
 _ALL_PROVIDERS = {
     "groq": GroqProvider,
@@ -142,8 +145,20 @@ class LLMRouter:
             if not provider.is_configured():
                 attempts[provider.name] = _NOT_CONFIGURED
                 continue
+            # Trimmed per provider, not once for all of them: a request cut
+            # down to Groq's 5k would arrive at Gemini already missing context
+            # Gemini had room to read.
+            fitted = fit_messages(system_prompt, messages, provider.input_budget)
+            if len(fitted) != len(messages):
+                logger.info(
+                    "%s: trimmed history from %d to %d messages for a %d-token budget",
+                    provider.name,
+                    len(messages),
+                    len(fitted),
+                    provider.input_budget,
+                )
             try:
-                return provider.generate(system_prompt, messages, review=review, **extra), provider.name
+                return provider.generate(system_prompt, fitted, review=review, **extra), provider.name
             except ProviderError as e:
                 attempts[provider.name] = str(e)
         raise RouterExhaustedError(attempts)

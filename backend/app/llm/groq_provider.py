@@ -23,6 +23,9 @@ class GroqProvider(LLMProvider):
         # Reviews on a smaller model don't eat into the main model's allowance.
         self.review_model = os.getenv("GROQ_REVIEW_MODEL", "openai/gpt-oss-20b")
         self.timeout = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
+        # Groq's free tier counts the prompt against 8,000 tokens per minute and
+        # refuses a single request over that outright, so this stays well under.
+        self.input_budget = int(os.getenv("GROQ_INPUT_BUDGET", "5000"))
 
     def is_configured(self) -> bool:
         return bool(self.api_key)

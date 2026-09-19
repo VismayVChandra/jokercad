@@ -382,6 +382,33 @@ def build_repair_prompt(error: str) -> str:
     )
 
 
+# For a script too long to send back whole. Rewriting a 400-line part costs more
+# output tokens than a free-tier model is allowed to produce, so the reply comes
+# back truncated mid-function; asking for only the lines that change fits easily.
+# Line numbers are deliberately not used: models mis-count them, but they copy a
+# handful of lines accurately.
+def build_patch_repair_prompt(error: str) -> str:
+    return (
+        "That code failed.\n\n"
+        f"Error:\n{error}\n\n"
+        "The script is long, so do NOT send it back in full and do NOT send a json block. "
+        "Reply with only the lines that change, as one or more edits in exactly this form:\n\n"
+        "<<<<<<< SEARCH\n"
+        "the existing lines, copied exactly\n"
+        "=======\n"
+        "the lines that replace them\n"
+        ">>>>>>> REPLACE\n\n"
+        "Rules:\n"
+        "- Copy the SEARCH lines character for character from the code above, including indentation.\n"
+        "- Each SEARCH must appear exactly once in the script. If the lines you want are not "
+        "unique, include a few more lines around them until they are.\n"
+        "- Keep each edit small: the lines that change, plus just enough context to be unique.\n"
+        "- Use several edits rather than one enormous one.\n"
+        "- Change nothing else. Every dimension, feature and the overall approach stay as they are.\n"
+        "- Reply with the edit blocks only: no prose, no ``` fences, no json."
+    )
+
+
 # Plans a whole product into a short list of parts, each with a self-contained
 # build prompt handed separately to the normal single-part pipeline above (a
 # fresh call, with no memory of the other parts' code) so they can be built and
