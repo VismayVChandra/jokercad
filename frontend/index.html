@@ -475,22 +475,25 @@
         </button>
       </div>
       <div class="plan-body">
-        <div id="planIntro">
-          <p>Describe the whole product. jokercad plans the parts it needs, builds each one, and assembles them.</p>
-          <textarea id="planInput" rows="3" placeholder="e.g. a desk organizer with a pen holder, a phone stand and a small drawer"></textarea>
+        <div id="planIntro" class="plan-step">
+          <p class="plan-lede">Describe the whole product. jokercad works out the parts it needs, builds each one, then puts them together.</p>
+          <textarea id="planInput" rows="3" placeholder="a desk organizer with a pen holder, a phone stand and a small drawer"></textarea>
+          <p class="plan-examples">Works best with a few parts that fit together — an enclosure with a lid, a bracket and its mount, a stand with a clip.</p>
           <p id="planError" class="account-status is-error" hidden></p>
-          <button type="button" id="planGoBtn" class="primary-btn">Plan the parts</button>
+          <div class="plan-actions">
+            <button type="button" id="planGoBtn" class="primary-btn">Plan the parts</button>
+          </div>
         </div>
-        <div id="planListSection" hidden>
-          <p class="params-hint">jokercad will build these as separate parts, then assemble them. Uncheck any you don't want.</p>
+        <div id="planListSection" class="plan-step" hidden>
+          <p class="plan-lede">These will be built as separate parts, then assembled. Uncheck anything you don't want.</p>
           <div id="planParts" class="plan-parts"></div>
-          <div class="asm-actions">
+          <div class="plan-actions">
             <button type="button" id="planBackBtn" class="text-btn">Back</button>
             <button type="button" id="planBuildBtn" class="primary-btn">Build &amp; assemble</button>
           </div>
         </div>
-        <div id="planProgress" hidden>
-          <p class="params-hint">Building each part — this can take a minute or two.</p>
+        <div id="planProgress" class="plan-step" hidden>
+          <p class="plan-lede">Building each part. This takes a minute or two — you can close this and watch the parts appear.</p>
           <ul id="planStatusList" class="plan-status-list"></ul>
         </div>
       </div>

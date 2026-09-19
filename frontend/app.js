@@ -2191,6 +2191,7 @@ planBuildBtn.addEventListener("click", async () => {
   for (let i = 0; i < chosen.length; i++) {
     const planned = chosen[i];
     rows[i].textContent = `${planned.name} — building…`;
+    rows[i].classList.add("is-building");
     const part = addPart(planned.name);
     selectPart(part);
     addUserEntry(planned.prompt);
@@ -2211,9 +2212,11 @@ planBuildBtn.addEventListener("click", async () => {
       setProviderBadge(data.provider_used);
       built.push(part);
       rows[i].textContent = `${planned.name} — built`;
+      rows[i].classList.remove("is-building");
       rows[i].classList.add("is-ok");
     } else {
       rows[i].textContent = `${planned.name} — failed: ${(data && data.error) || "couldn't reach the server"}`;
+      rows[i].classList.remove("is-building");
       rows[i].classList.add("is-error");
     }
     setBusy(false);

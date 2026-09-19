@@ -1145,36 +1145,58 @@ button {
 }
 
 .plan-modal-card {
-  width: min(480px, 100%);
+  width: min(520px, 100%);
 }
 
 .plan-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* Each step owns its own column, so the textarea and its button stack instead
+   of flowing inline next to each other. */
+.plan-step {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 18px;
-  overflow-y: auto;
+  gap: 14px;
 }
 
 .plan-body p {
   margin: 0;
+}
+
+.plan-lede {
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--text-dim);
 }
 
+.plan-examples {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
 #planInput {
-  padding: 10px 12px;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 96px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.28);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  line-height: 1.55;
   resize: vertical;
   outline: none;
   transition: border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+
+#planInput::placeholder {
+  color: var(--text-faint);
 }
 
 #planInput:focus {
@@ -1182,33 +1204,63 @@ button {
   box-shadow: 0 0 0 3px rgba(124, 108, 255, 0.12);
 }
 
-#planGoBtn {
-  align-self: flex-start;
+/* One row for every step's buttons, so the primary action always lands in the
+   same place as you move through the modal. */
+.plan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.plan-actions .text-btn {
+  margin-right: auto;
+}
+
+.plan-actions .primary-btn {
+  padding: 9px 18px;
 }
 
 .plan-parts {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 320px;
+  gap: 8px;
+  max-height: 46vh;
   overflow-y: auto;
 }
 
 .plan-part-row {
   display: grid;
   grid-template-columns: auto 1fr;
-  column-gap: 8px;
-  row-gap: 2px;
-  padding: 10px 12px;
+  align-items: start;
+  column-gap: 10px;
+  row-gap: 3px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.015);
   cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+
+.plan-part-row:hover {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .plan-part-row input[type="checkbox"] {
   grid-row: 1 / 3;
-  margin-top: 2px;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
   accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* A part left out is dimmed, so what will actually be built reads at a glance. */
+.plan-part-row:has(input:not(:checked)) {
+  opacity: 0.45;
 }
 
 .plan-part-name {
@@ -1218,34 +1270,43 @@ button {
 
 .plan-part-desc {
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.5;
   color: var(--text-dim);
 }
 
 .plan-status-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .plan-status-row {
-  padding: 9px 12px;
+  padding: 11px 14px;
   border: 1px solid var(--border);
+  border-left-width: 3px;
   border-radius: var(--radius-md);
   font-size: 12.5px;
+  line-height: 1.45;
   color: var(--text-dim);
 }
 
+.plan-status-row.is-building {
+  border-left-color: var(--accent);
+  color: var(--text);
+}
+
 .plan-status-row.is-ok {
-  border-color: rgba(94, 210, 145, 0.35);
-  color: var(--success);
+  border-color: rgba(61, 220, 151, 0.3);
+  border-left-color: var(--success);
+  color: var(--text);
 }
 
 .plan-status-row.is-error {
-  border-color: rgba(240, 110, 110, 0.35);
+  border-color: rgba(255, 107, 129, 0.3);
+  border-left-color: var(--error);
   color: var(--error);
 }
 
